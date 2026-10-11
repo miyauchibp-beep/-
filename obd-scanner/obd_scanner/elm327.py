@@ -23,7 +23,6 @@ CAN_PROTOCOLS = {"6", "7", "8", "9"}
 NO_DATA_MARKERS = ("NO DATA", "?")
 ERROR_MARKERS = (
     "UNABLE TO CONNECT",
-    "BUS INIT",
     "BUS ERROR",
     "CAN ERROR",
     "DATA ERROR",
@@ -57,6 +56,13 @@ def parse_response(raw):
         line = line.strip().rstrip(">").strip()
         if not line or line == "SEARCHING...":
             continue
+        # K-line の初期化結果。"BUS INIT: ...OK" の後にデータが続く
+        if line.startswith("BUS INIT"):
+            if "ERROR" in line:
+                raise ObdError(line)
+            line = line.split("OK", 1)[1].strip() if "OK" in line else ""
+            if not line:
+                continue
         if any(m in line for m in ERROR_MARKERS):
             raise ObdError(line)
         if line in NO_DATA_MARKERS or "NO DATA" in line:
@@ -155,8 +161,12 @@ class Elm327:
             text = text.lstrip()[len(command):]
         return text
 
-    def connect(self, protocol="0"):
-        """アダプタを初期化し、車両と通信できる状態にする。"""
+    def connect(self, protocol="0", extra_init=()):
+        """アダプタを初期化し、車両と通信できる状態にする。
+
+        extra_init には、ATSP の後に送る追加の AT コマンド（例: ["ATKW0"]）を渡す。
+        kline_init_test.py で見つかった設定をそのまま使える。
+        """
         self.send_raw("ATZ", timeout=5)
         if self._is_serial:
             time.sleep(0.5)
@@ -164,6 +174,8 @@ class Elm327:
             self.send_raw(cmd, timeout=3)
         self.version = self.send_raw("ATI", timeout=3).strip(" \r\n>")
         self.send_raw(f"ATSP{protocol}", timeout=3)
+        for cmd in extra_init:
+            self.send_raw(cmd, timeout=3)
         # 最初の要求でプロトコルの自動判別が行われる
         if not self.query(0x01, 0x00, timeout=20):
             raise ObdError(
