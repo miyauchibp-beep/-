@@ -1,0 +1,196 @@
+"""ELM327 互換アダプタとの通信と、OBD2 応答の解析。"""
+
+import re
+import time
+
+PROMPT = b">"
+
+# ATDPN で返るプロトコル番号（先頭の "A" は自動判別の意味）
+PROTOCOLS = {
+    "1": "SAE J1850 PWM",
+    "2": "SAE J1850 VPW",
+    "3": "ISO 9141-2",
+    "4": "ISO 14230-4 KWP (5 baud init)",
+    "5": "ISO 14230-4 KWP (fast init)",
+    "6": "ISO 15765-4 CAN (11bit, 500kbps)",
+    "7": "ISO 15765-4 CAN (29bit, 500kbps)",
+    "8": "ISO 15765-4 CAN (11bit, 250kbps)",
+    "9": "ISO 15765-4 CAN (29bit, 250kbps)",
+    "A": "SAE J1939 CAN",
+}
+CAN_PROTOCOLS = {"6", "7", "8", "9"}
+
+NO_DATA_MARKERS = ("NO DATA", "?")
+ERROR_MARKERS = (
+    "UNABLE TO CONNECT",
+    "BUS INIT",
+    "BUS ERROR",
+    "CAN ERROR",
+    "DATA ERROR",
+    "BUFFER FULL",
+    "FB ERROR",
+    "LV RESET",
+    "STOPPED",
+)
+
+_FRAME_INDEX = re.compile(r"^([0-9A-F]):\s*(.*)$")
+_HEX_ONLY = re.compile(r"^[0-9A-F ]+$")
+
+
+class ObdError(Exception):
+    """アダプタや車両との通信に失敗したとき。"""
+
+
+def parse_response(raw):
+    """ELM327 の生応答を ECU ごとのバイト列リストに変換する。
+
+    ヘッダ表示オフ（ATH0）の前提で、次の形式に対応する。
+      - 単一フレーム:   "41 0C 1A F8"
+      - 複数ECUの応答:  1 行ずつ別 ECU
+      - CAN 複数フレーム: "014" / "0: 49 02 01 31 47 31" / "1: ..." のように
+        バイト数の行と、"n:" で始まる連番の行
+    データがない（NO DATA 等）ときは空リストを返す。
+    """
+    text = raw.replace("\x00", "").upper()
+    lines = []
+    for line in re.split(r"[\r\n]+", text):
+        line = line.strip().rstrip(">").strip()
+        if not line or line == "SEARCHING...":
+            continue
+        if any(m in line for m in ERROR_MARKERS):
+            raise ObdError(line)
+        if line in NO_DATA_MARKERS or "NO DATA" in line:
+            continue
+        lines.append(line)
+
+    messages = []
+    multi = None
+    for line in lines:
+        m = _FRAME_INDEX.match(line)
+        if m:
+            if multi is None:
+                multi = []
+                messages.append(multi)
+            multi.extend(_to_bytes(m.group(2)))
+            continue
+        multi = None
+        compact = line.replace(" ", "")
+        # CAN 複数フレームの先頭に付くバイト数（例: "014"）は捨てる
+        if len(compact) == 3 and _HEX_ONLY.match(compact):
+            continue
+        if _HEX_ONLY.match(line):
+            messages.append(_to_bytes(line))
+    return [m for m in messages if m]
+
+
+def _to_bytes(hex_text):
+    compact = hex_text.replace(" ", "")
+    if len(compact) % 2:
+        compact = compact[:-1]
+    return [int(compact[i:i + 2], 16) for i in range(0, len(compact), 2)]
+
+
+class Elm327:
+    """ELM327 互換アダプタ。
+
+    port にはシリアルポート名（例: COM3, /dev/ttyUSB0, /dev/rfcomm0）か、
+    read/write を持つオブジェクト（デモ用シミュレータ）を渡す。
+    """
+
+    def __init__(self, port, baudrate=38400, timeout=10.0):
+        if isinstance(port, str):
+            try:
+                import serial
+            except ImportError as e:
+                raise ObdError(
+                    "pyserial が入っていません。`pip install pyserial` を実行してください"
+                ) from e
+            try:
+                self._io = serial.Serial(port, baudrate=baudrate, timeout=0.1)
+                self._is_serial = True
+            except serial.SerialException as e:
+                raise ObdError(f"ポート {port} を開けません: {e}") from e
+        else:
+            self._io = port
+            self._is_serial = False
+        self.timeout = timeout
+        self.version = ""
+        self.protocol = ""
+        self.protocol_name = ""
+
+    @property
+    def is_can(self):
+        return self.protocol in CAN_PROTOCOLS
+
+    def close(self):
+        try:
+            self.send_raw("ATPC", timeout=1)
+        except ObdError:
+            pass
+        close = getattr(self._io, "close", None)
+        if close:
+            close()
+
+    def send_raw(self, command, timeout=None):
+        """コマンドを送り、プロンプト ">" までの応答文字列を返す。"""
+        reset = getattr(self._io, "reset_input_buffer", None)
+        if reset:
+            reset()
+        self._io.write((command + "\r").encode("ascii"))
+        if hasattr(self._io, "flush"):
+            self._io.flush()
+        deadline = time.monotonic() + (timeout or self.timeout)
+        buf = bytearray()
+        while time.monotonic() < deadline:
+            chunk = self._io.read(64)
+            if chunk:
+                buf.extend(chunk)
+                if PROMPT in chunk:
+                    break
+        else:
+            raise ObdError(f"アダプタから応答がありません（{command}）")
+        text = buf.decode("ascii", errors="ignore")
+        # エコーが残っていれば取り除く
+        if text.lstrip().upper().startswith(command.upper()):
+            text = text.lstrip()[len(command):]
+        return text
+
+    def connect(self, protocol="0"):
+        """アダプタを初期化し、車両と通信できる状態にする。"""
+        self.send_raw("ATZ", timeout=5)
+        if self._is_serial:
+            time.sleep(0.5)
+        for cmd in ("ATE0", "ATL0", "ATS1", "ATH0", "ATAT1"):
+            self.send_raw(cmd, timeout=3)
+        self.version = self.send_raw("ATI", timeout=3).strip(" \r\n>")
+        self.send_raw(f"ATSP{protocol}", timeout=3)
+        # 最初の要求でプロトコルの自動判別が行われる
+        if not self.query(0x01, 0x00, timeout=20):
+            raise ObdError(
+                "車両から応答がありません。イグニッション ON か、エンジンがかかっているか確認してください"
+            )
+        self.protocol = self.send_raw("ATDPN", timeout=3).strip(" \r\n>").lstrip("A")
+        self.protocol_name = PROTOCOLS.get(self.protocol, f"不明 ({self.protocol})")
+
+    def query(self, mode, pid=None, timeout=None):
+        """OBD2 要求を送り、ECU ごとの応答データ（モード/PID 以降）を返す。"""
+        cmd = f"{mode:02X}" + (f"{pid:02X}" if pid is not None else "")
+        raw = self.send_raw(cmd, timeout=timeout)
+        expected = mode + 0x40
+        results = []
+        for msg in parse_response(raw):
+            if not msg or msg[0] != expected:
+                continue
+            body = msg[1:]
+            if pid is not None:
+                if not body or body[0] != pid:
+                    continue
+                body = body[1:]
+            results.append(body)
+        return results
+
+    def battery_voltage(self):
+        text = self.send_raw("ATRV", timeout=3).strip(" \r\n>")
+        m = re.search(r"(\d+(?:\.\d+)?)", text)
+        return float(m.group(1)) if m else None
+
