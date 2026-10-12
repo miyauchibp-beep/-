@@ -31,20 +31,27 @@ PC からだと `BUS INIT: ...ERROR` になり ECU に繋がりません（ス�
 1. このフォルダ（`kline_init_test.py` と `obd_scanner` フォルダ）を `C:\Users\Owner\Downloads\OBD` に置く
 2. スマホの Bluetooth をオフにし、Car Scanner を閉じる
 3. 車のキーを ON（エンジンは OFF、電圧が低ければ安定化電源をつなぐ）
-4. `run_kline_test.bat` をダブルクリック（COM6 で実行し、終わっても画面は閉じません）。
+4. `run_kline_test.bat` をダブルクリック（COM ポートを聞かれます。前回の番号を覚えています。終わっても画面は閉じません）。
    または、コマンドプロンプトで:
 
    ```
    cd C:\Users\Owner\Downloads\OBD
-   python kline_init_test.py COM6
+   python kline_init_test.py COM7
    ```
 
 5. 終わったら `kline_logs\kline_test_日時.txt`（と、成功していれば `working_init.json`）を Claude に渡す
 
 - 全部で数分かかります（設定の切り替えごとに 5 秒待ちます。K-line は続けて初期化すると失敗しやすいため）
-- 成功しても全部試したいとき: `python kline_init_test.py COM6 --all`
-- 特定の番号だけ: `python kline_init_test.py COM6 --only 2 3`
+- 成功しても全部試したいとき: `python kline_init_test.py COM7 --all`
+- 特定の番号だけ: `python kline_init_test.py COM7 --only 2 3`
 - アダプタなしで動きを見る: `python kline_init_test.py --demo`
+
+### COM ポートについて
+
+アダプタの番号は、Windows の「その他の Bluetooth 設定」→「COM ポート」タブで「OBDII」の **発信** の行。
+ペアリングし直すと変わる（2026-10-12 の再起動後に COM6 → COM7 に入れ替わり、COM6 は着信になった）。
+.bat から起動すると番号を聞かれ、つながった番号は `obd_port.txt` に保存されて次回の既定値になる。
+着信側のポートや、相手が使用中のポートを開くと `PermissionError(13)`（アクセスが拒否されました）になる。
 
 ### 安全のための決まり
 
@@ -53,7 +60,7 @@ PC からだと `BUS INIT: ...ERROR` になり ECU に繋がりません（ス�
 
 ## 故障コード・ライブデータの読み取りと AI 診断（obd_scan.py）
 
-`run_scan.bat` をダブルクリック、または `python obd_scan.py COM6`。
+`run_scan.bat` をダブルクリック、または `python obd_scan.py COM7`。
 車台番号・警告灯・レディネス・故障コード（現在／保留中／消去不可）・フリーズフレーム・ライブデータを読み、
 `scan_logs\scan_日時.json` に保存します。
 
@@ -67,7 +74,7 @@ PC からだと `BUS INIT: ...ERROR` になり ECU に繋がりません（ス�
 - エンジンがかかっていれば、続けて 10 秒間 O2 センサ・燃料補正・回転数を読み、最小／最大／平均と
   フロント O2 の反転回数（0.45V をまたいだ回数）を `trend` として保存・診断に使う（`--trend 秒`、0 で無効）。
   フロント O2 はほかの項目の合間に毎回はさんで読み、間隔を短くしている
-- ライブデータを表示し続ける: `python obd_scan.py COM6 --live`（`--csv` で記録も）
+- ライブデータを表示し続ける: `python obd_scan.py COM7 --live`（`--csv` で記録も）
 - `working_init.json` があれば、その接続設定を使います
 
 ## 構成

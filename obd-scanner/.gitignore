@@ -1,3 +1,4 @@
 kline_logs/
 working_init.json
 __pycache__/
+obd_port.txt

@@ -1,9 +1,9 @@
 r"""車の故障コード・フリーズフレーム・ライブデータを読み取り、Claude に診断させる（車へは読み取りのみ）。
 
 使い方（Windows）:
-    python obd_scan.py COM6            # 読み取って保存 → 車両情報・症状を聞いて Claude が診断
-    python obd_scan.py COM6 --no-ai    # 読み取りと保存だけ
-    python obd_scan.py COM6 --live     # ライブデータを表示し続ける（Ctrl+C で終了）
+    python obd_scan.py COM7            # 読み取って保存 → 車両情報・症状を聞いて Claude が診断
+    python obd_scan.py COM7 --no-ai    # 読み取りと保存だけ
+    python obd_scan.py COM7 --live     # ライブデータを表示し続ける（Ctrl+C で終了）
     python obd_scan.py --from-scan scan_logs\scan_20261012_121847.json   # 保存済みの結果で診断し直す
     python obd_scan.py --from-scan     # ファイル名を省くと、いちばん新しい読み取り結果を使う
     python obd_scan.py --demo          # アダプタなしで動作確認
@@ -26,7 +26,7 @@ from datetime import datetime
 try:
     from obd_scanner import pids
     from obd_scanner.ai_diag import AiDiagError, diagnose
-    from obd_scanner.console import ask_port, run_from_console
+    from obd_scanner.console import ask_port, remember_port, run_from_console
     from obd_scanner.elm327 import Elm327, ObdError
     from obd_scanner.scan import full_scan, read_live, supported_pids
 except ImportError:
@@ -159,7 +159,7 @@ def run_ai(report, stamp, report_path=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="OBD2 の故障コード・ライブデータを読み取る")
-    ap.add_argument("port", nargs="?", help="アダプタの COM ポート（例: COM6）")
+    ap.add_argument("port", nargs="?", help="アダプタの COM ポート（例: COM7）")
     ap.add_argument("--baudrate", type=int, default=38400)
     ap.add_argument("--live", action="store_true", help="ライブデータを表示し続ける")
     ap.add_argument("--csv", action="store_true", help="--live のとき CSV にも記録する")
@@ -209,6 +209,8 @@ def main(argv=None):
         print("・キーは ON ですか？ 古い車は kline_init_test.py（run_kline_test.bat）で設定を探してください")
         return 1
     print(f"接続しました: {elm.protocol_name}")
+    if not args.demo:
+        remember_port(port)
 
     try:
         if args.live:

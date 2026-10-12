@@ -69,6 +69,29 @@ class PortOpenTest(unittest.TestCase):
         self.assertIn("ほかのアプリが使用中", str(cm.exception))
 
 
+class AskPortTest(unittest.TestCase):
+    def test_normalize_and_forbid(self):
+        from obd_scanner.console import ask_port
+        self.assertEqual(ask_port("com7"), "COM7")
+        self.assertEqual(ask_port("7"), "COM7")
+        self.assertIsNone(ask_port("4"))
+        self.assertIsNone(ask_port("com5"))
+
+    def test_remembered_port_is_default(self):
+        from unittest import mock
+        from obd_scanner import console
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                self.assertEqual(console.last_port(), "COM7")
+                console.remember_port("COM9")
+                with mock.patch("builtins.input", return_value=""), mock.patch("builtins.print"):
+                    self.assertEqual(console.ask_port(None), "COM9")
+            finally:
+                os.chdir(cwd)
+
+
 class ConnectTest(unittest.TestCase):
     def test_connect_fails_without_kw0(self):
         with self.assertRaises(ObdError):

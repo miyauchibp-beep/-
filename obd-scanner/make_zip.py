@@ -26,6 +26,8 @@ README = """OBD スキャンツール
   スマホの Bluetooth をオフ、Car Scanner を閉じる。
   車にアダプタをさして、キーを ON（エンジンは OFF のままでよい）。
   （青い「PC が保護されました」が出たら「詳細情報」→「実行」）
+  起動すると COM ポートを聞かれます。Windows の「その他の Bluetooth 設定」→「COM ポート」で
+  「OBDII」の「発信」になっている番号（2026-10-12 時点では COM7）。一度つながると次回から覚えています。
 
 ■ run_scan.bat … 故障コード・フリーズフレーム・ライブデータを読み、Claude が診断
   読み取り後に「車両」「症状」を聞かれるので入力（空のまま Enter でも可）。
@@ -36,7 +38,7 @@ README = """OBD スキャンツール
 
 ■ run_diag_last.bat … 車をつながずに、いちばん新しい読み取り結果を Claude に診断させる
   ライブデータを見続けたいときは、このフォルダのアドレス欄に cmd と入れて Enter し、
-    python obd_scan.py COM6 --live
+    python obd_scan.py COM7 --live
   （CSV にも記録するなら --live --csv。Ctrl+C で終了）
 
 ■ run_kline_test.bat … 繋がらない車で、接続設定を探す

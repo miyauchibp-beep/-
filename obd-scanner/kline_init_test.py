@@ -1,9 +1,9 @@
 """K-line（KWP / ISO 9141）で ECU に繋がる初期化設定を、順番に試して探す。
 
 使い方（Windows）:
-    python kline_init_test.py COM6
-    python kline_init_test.py COM6 --all      # 成功しても最後まで全部試す
-    python kline_init_test.py COM6 --round 1  # 1 回目（一般的な設定）をもう一度
+    python kline_init_test.py COM7
+    python kline_init_test.py COM7 --all      # 成功しても最後まで全部試す
+    python kline_init_test.py COM7 --round 1  # 1 回目（一般的な設定）をもう一度
     python kline_init_test.py --demo          # アダプタなしで動作確認
 
 車両に送るのは読み取りの要求（01 / 03 / 1A / 21）だけです。
@@ -24,7 +24,7 @@ from datetime import datetime
 try:
     from obd_scanner.elm327 import PROTOCOLS, Elm327, ObdError, parse_response
     from obd_scanner.pids import decode_monitor_status, supported_from_bitmap
-    from obd_scanner.console import ask_port, run_from_console
+    from obd_scanner.console import ask_port, remember_port, run_from_console
 except ImportError:
     # ダブルクリック起動だと、ここで落ちると画面が一瞬で閉じてしまうので待つ
     print("obd_scanner フォルダが見つかりません。")
@@ -179,7 +179,7 @@ def summarize_success(elm, log):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="K-line の初期化設定を順番に試す")
-    ap.add_argument("port", nargs="?", help="アダプタの COM ポート（例: COM6）")
+    ap.add_argument("port", nargs="?", help="アダプタの COM ポート（例: COM7）")
     ap.add_argument("--baudrate", type=int, default=38400)
     ap.add_argument("--wait", type=float, default=5.0, help="設定の切り替え前に待つ秒数（既定5）")
     ap.add_argument("--all", action="store_true", help="成功しても全部試す")
@@ -229,6 +229,8 @@ def main(argv=None):
         print(f"アダプタから正しい応答がありません: {version!r}")
         log.close()
         return 1
+    if not args.demo:
+        remember_port(args.port)
     volt = exchange(elm, log, "ATRV", timeout=3).strip(" \r\n>")
     print(f"  アダプタ: {version.splitlines()[-1].strip()}  電圧: {volt}")
     try:
@@ -306,7 +308,7 @@ def main(argv=None):
         print("  1. Car Scanner の通信ログ・接続設定を見て、送っているコマンドを比べる")
         print("  2. 安定化電源で 13.5V 前後にする、またはエンジンをかけてから再実行")
         if args.round == 2:
-            print("  （1 回目の設定をもう一度試すなら: python kline_init_test.py COM6 --round 1）")
+            print("  （1 回目の設定をもう一度試すなら: python kline_init_test.py COM7 --round 1）")
     print(f"記録: {log.path}")
     return 0 if found else 1
 
