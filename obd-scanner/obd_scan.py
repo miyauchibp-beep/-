@@ -248,6 +248,11 @@ def main(argv=None):
         return 1
     if not args.demo:
         remember_port(port)
+    # 車とのやり取りをすべて記録する（読み取れない項目があったときの調査用）
+    raw_path = os.path.join("scan_logs", f"raw_{stamp}.txt")
+    raw_file = open(raw_path, "w", encoding="utf-8")
+    elm.log = lambda cmd, reply: raw_file.write(
+        f"> {cmd:<14} {' | '.join(x.strip() for x in reply.replace('>', '').splitlines() if x.strip())}\n")
     print("車両に接続しています...")
     try:
         protocol, extra, reset, label = connect_any(elm, saved)
@@ -256,6 +261,8 @@ def main(argv=None):
         print("・キーは ON ですか？")
         print("・それでもだめなら run_kline_test.bat でほかの設定を探してください")
         elm.close()
+        raw_file.close()
+        print(f"通信の記録: {raw_path}")
         return 1
     print(f"接続しました: {elm.protocol_name}")
     if not args.demo and label != "前回つながった設定":
@@ -270,6 +277,7 @@ def main(argv=None):
         report["scanned_at"] = datetime.now().isoformat(timespec="seconds")
     finally:
         elm.close()
+        raw_file.close()
 
     print_report(report)
     path = os.path.join("scan_logs", f"scan_{stamp}.json")

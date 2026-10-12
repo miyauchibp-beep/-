@@ -147,6 +147,8 @@ class Elm327:
         self.protocol = ""
         self.protocol_name = ""
         self.generic_obd = False
+        # 送受信の記録先（command, reply を受け取る関数）。不具合の調査用
+        self.log = None
 
     @property
     def is_can(self):
@@ -178,11 +180,15 @@ class Elm327:
                 if PROMPT in chunk:
                     break
         else:
+            if self.log:
+                self.log(command, "(応答なし) " + buf.decode("ascii", errors="ignore"))
             raise ObdError(f"アダプタから応答がありません（{command}）")
         text = buf.decode("ascii", errors="ignore")
         # エコーが残っていれば取り除く
         if text.lstrip().upper().startswith(command.upper()):
             text = text.lstrip()[len(command):]
+        if self.log:
+            self.log(command, text)
         return text
 
     def connect(self, protocol="0", extra_init=(), reset="ATZ"):
