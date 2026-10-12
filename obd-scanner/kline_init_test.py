@@ -53,12 +53,26 @@ ROUND1 = [
 # 共通規格の 33 には返事がなかったので、国内向けの ECU が使いそうな宛先を順に試す
 _INIT_ADDRESSES = ["01", "10", "11", "12", "13", "15", "17", "18", "1A", "28", "58", "02"]
 # 先頭は自動判別。新しい車（CAN）ならここで繋がり、古い方式の試行は不要になる
-ROUND2 = [("0", [], "自動判別（新しい車はここで繋がる）")] + [
+# 互換アダプタは自動判別で CAN を見つけられないことがあるので、CAN 11bit 500k を直接指定する試行も先に入れる。
+# 2026-10-12、Car Scanner はアレックスに ISO 15765-4 CAN (11bit, 500k) で繋がったが、PC の自動判別は失敗していた
+ROUND2 = [("0", [], "自動判別（新しい車はここで繋がる）"),
+          ("6", [], "CAN 11bit 500k を直接指定")] + [
     ("4", ["ATKW0", f"ATIIA{a}"], f"5baud初期化 宛先 {a}") for a in _INIT_ADDRESSES] + [
     ("5", ["ATKW0", f"ATSH81{a}F1"], f"高速初期化 宛先 {a}") for a in ["10", "11", "01"]
 ]
 
-ROUNDS = {1: ROUND1, 2: ROUND2}
+# 3 回目: CAN だけを、指定方法・待ち時間を変えて試す
+ROUND3 = [
+    ("6", [], "CAN 11bit 500k"),
+    ("6", ["ATSTFF"], "CAN 11bit 500k + 応答待ち最大"),
+    ("6", ["ATCAF1", "ATSH7DF"], "CAN 11bit 500k + 宛先 7DF（全 ECU）を明示"),
+    ("6", ["ATSH7E0", "ATCRA7E8"], "CAN 11bit 500k + エンジン ECU（7E0）を直接指定"),
+    ("8", [], "CAN 11bit 250k"),
+    ("7", [], "CAN 29bit 500k"),
+    ("9", [], "CAN 29bit 250k"),
+]
+
+ROUNDS = {1: ROUND1, 2: ROUND2, 3: ROUND3}
 
 # 初期化に成功したあとに送る読み取り要求（すべて読み取りのみ）
 #   01 00/01 01 … 共通規格の対応PID・警告灯   03 … 故障コード
@@ -161,7 +175,7 @@ def main(argv=None):
     ap.add_argument("--all", action="store_true", help="成功しても全部試す")
     ap.add_argument("--only", type=int, nargs="+", help="試す番号だけ指定（例: --only 2 3）")
     ap.add_argument("--round", type=int, choices=sorted(ROUNDS), default=2,
-                    help="試す設定の組（1: 一般的な設定、2: 宛先を変える。既定 2）")
+                    help="試す設定の組（1: 一般的な設定、2: 自動判別・CAN・K-line の宛先、3: CAN だけ。既定 2）")
     ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
     args = ap.parse_args(argv)
 

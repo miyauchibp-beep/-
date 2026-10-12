@@ -283,6 +283,25 @@ class KlineInitTestScript(unittest.TestCase):
         self.assertIn("[ 1] 自動判別", out.getvalue())
         self.assertNotIn("[ 2]", out.getvalue())
 
+    def test_can_direct_is_tried_when_auto_detect_fails(self):
+        # 自動判別で CAN を見つけられない互換品でも、CAN 直接指定（2 番目）で繋がる
+        import contextlib
+        import io
+        from unittest import mock
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        orig = fake._init_bus
+        fake._init_bus = lambda: "SEARCHING...\rUNABLE TO CONNECT" if fake.protocol == "0" else orig()
+        out = io.StringIO()
+        with mock.patch("obd_scanner.simulator.FakeElm327", return_value=fake), contextlib.redirect_stdout(out):
+            self.assertEqual(kline_init_test.main(["--demo"]), 0)
+        text = out.getvalue()
+        self.assertIn("[ 1] 自動判別（新しい車はここで繋がる） ... 失敗", text)
+        self.assertIn("[ 2] CAN 11bit 500k を直接指定 ... 成功", text)
+        self.assertIn("→ プロトコル 6", text)
+
+    def test_round3_only_uses_can(self):
+        self.assertTrue(all(p in "6789" for p, _, _ in kline_init_test.ROUND3))
+
     def test_refuses_snapon_ports(self):
         self.assertEqual(kline_init_test.main(["COM4"]), 2)
         self.assertEqual(kline_init_test.main(["com5"]), 2)

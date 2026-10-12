@@ -17,6 +17,9 @@ PC からだと `BUS INIT: ...ERROR` になり ECU に繋がりません（ス�
   2026-10-12 の実車テスト（12.5V）では、15 通りすべて失敗
 - 2026-10-12 トヨタ bB（QNC21, CAN）では自動判別で成功（プロトコル 6、対応PID 19 個）。
   PC → Bluetooth → アダプタ → ECU の経路は正常で、問題はアレックスの K-line 初期化に限られる
+- 2026-10-12 Car Scanner の画面では、アレックスは **ISO 15765-4 CAN (11bit, 500k)** で接続（較正ID 45410200）。
+  HANDOFF.md の「プロトコル 4（KWP）」と食い違う。PC の自動判別（ATSP0）は UNABLE TO CONNECT だったため、
+  既定の組に CAN 直接指定（ATSP6）を追加し、CAN だけを試す `--round 3` も用意
 - 次の手がかり: Car Scanner が実際に送っている設定（接続プロファイル・通信ログ）と、
   新しい CAN の車で PC → アダプタ → ECU の経路が正常か（`--round 1 --only 10`）
 
