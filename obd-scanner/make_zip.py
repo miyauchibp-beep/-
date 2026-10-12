@@ -32,7 +32,7 @@ README = """OBD スキャンツール
   Claude の診断には API キーが必要です。未設定なら、コマンドプロンプトで一度だけ
     setx ANTHROPIC_API_KEY "sk-ant-で始まるキー"
   を実行し、画面を開き直してください。
-  保存済みの結果で診断し直す: python obd_scan.py --from-scan scan_logs\scan_日時.json
+  保存済みの結果で診断し直す: python obd_scan.py --from-scan scan_logs\\scan_日時.json
   ライブデータを見続けたいときは、このフォルダのアドレス欄に cmd と入れて Enter し、
     python obd_scan.py COM6 --live
   （CSV にも記録するなら --live --csv。Ctrl+C で終了）
