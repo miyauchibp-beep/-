@@ -20,8 +20,17 @@ import sys
 import time
 from datetime import datetime
 
-from obd_scanner.elm327 import Elm327, ObdError, parse_response
-from obd_scanner.pids import decode_monitor_status, supported_from_bitmap
+try:
+    from obd_scanner.elm327 import Elm327, ObdError, parse_response
+    from obd_scanner.pids import decode_monitor_status, supported_from_bitmap
+except ImportError:
+    # ダブルクリック起動だと、ここで落ちると画面が一瞬で閉じてしまうので待つ
+    print("obd_scanner フォルダが見つかりません。")
+    print("kline_init_test.py と同じ場所に、obd_scanner フォルダごとコピーしてください。")
+    print(f"  今の場所: {os.path.dirname(os.path.abspath(__file__))}")
+    if os.name == "nt":
+        input("\nEnter キーを押すと閉じます...")
+    sys.exit(1)
 
 # スナップオン（NANO-BT2）が使うポート。OBD 車検に関わるので絶対に触らない
 FORBIDDEN_PORTS = {"COM4", "COM5"}
@@ -143,6 +152,10 @@ def main(argv=None):
     print("アダプタを確認しています...")
     log.write("\n[アダプタ確認]")
     version = exchange(elm, log, "ATZ", timeout=5).strip(" \r\n>")
+    if "ELM" not in version.upper():
+        # 接続直後はゴミが混じって ATZ の応答が崩れることがあるので、もう一度だけ聞く
+        time.sleep(1)
+        version = exchange(elm, log, "ATI", timeout=5).strip(" \r\n>")
     if "ELM" not in version.upper():
         print(f"アダプタから正しい応答がありません: {version!r}")
         log.close()
