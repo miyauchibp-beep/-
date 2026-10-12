@@ -120,6 +120,13 @@ class Elm327:
                         f"ポート {port} はほかのアプリが使用中です。スマホの Bluetooth をオフにし、"
                         "ほかの黒い画面を閉じて、アダプタを抜き差ししてからやり直してください"
                     ) from e
+                if "121" in str(e) or "セマフォ" in str(e) or "semaphore" in str(e).lower():
+                    raise ObdError(
+                        f"ポート {port} の先のアダプタから Bluetooth の返事がありません。"
+                        "アダプタの電源（PWR ランプ）を確認し、ボタンで OFF→ON してからやり直してください。"
+                        "直らなければ、Windows で OBDII をいったん削除してペアリングし直し、"
+                        "「COM ポート」タブで新しい「発信」の番号を確認してください"
+                    ) from e
                 raise ObdError(f"ポート {port} を開けません: {e}") from e
         else:
             self._io = port

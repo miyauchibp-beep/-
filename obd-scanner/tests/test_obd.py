@@ -92,6 +92,19 @@ class AskPortTest(unittest.TestCase):
                 os.chdir(cwd)
 
 
+class PortTimeoutTest(unittest.TestCase):
+    def test_bluetooth_timeout_message(self):
+        # 2026-10-12、再起動後に COM7 を開いたときの Windows のエラー
+        from unittest import mock
+        import serial
+        err = serial.SerialException(
+            "could not open port 'COM7': OSError(22, 'セマフォがタイムアウトしました。', None, 121)")
+        with mock.patch("serial.Serial", side_effect=err):
+            with self.assertRaises(ObdError) as cm:
+                Elm327("COM7")
+        self.assertIn("Bluetooth の返事がありません", str(cm.exception))
+
+
 class ConnectTest(unittest.TestCase):
     def test_connect_fails_without_kw0(self):
         with self.assertRaises(ObdError):
