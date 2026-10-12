@@ -25,6 +25,12 @@ def _temp(d):
     return d[0] - 40
 
 
+def _o2_locations(d):
+    """PID 13: 付いている O2 センサ（ビット 0-3 がバンク 1 のセンサ 1-4、4-7 がバンク 2）。"""
+    found = [f"B{bit // 4 + 1}S{bit % 4 + 1}" for bit in range(8) if d[0] & (1 << bit)]
+    return "、".join(found) if found else "なし"
+
+
 _FUEL_STATUS = {
     0x00: "-",
     0x01: "開ループ（暖機中）",
@@ -52,6 +58,7 @@ PIDS = {
         Pid(0x0F, "吸気温", "°C", 1, _temp),
         Pid(0x10, "吸入空気量 (MAF)", "g/s", 2, lambda d: round(_ab(d) / 100, 2)),
         Pid(0x11, "スロットル開度", "%", 1, _pct),
+        Pid(0x13, "O2 センサの装着位置", "", 1, _o2_locations),
         Pid(0x14, "O2 センサ B1S1", "V", 2, lambda d: round(d[0] / 200, 3)),
         Pid(0x15, "O2 センサ B1S2", "V", 2, lambda d: round(d[0] / 200, 3)),
         Pid(0x1F, "始動後経過時間", "秒", 2, _ab),

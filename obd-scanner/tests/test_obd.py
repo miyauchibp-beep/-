@@ -38,6 +38,10 @@ class DecodeTest(unittest.TestCase):
     def test_rpm(self):
         self.assertEqual(pids.decode(0x0C, [0x1A, 0xF8]), (1726, "rpm"))
 
+    def test_o2_locations(self):
+        self.assertEqual(pids.decode(0x13, [0x03]), ("B1S1、B1S2", ""))
+        self.assertEqual(pids.decode(0x13, [0x01]), ("B1S1", ""))
+
     def test_coolant(self):
         self.assertEqual(pids.decode(0x05, [0x7B]), (83, "°C"))
 
@@ -320,6 +324,32 @@ class ConnectAnyTest(unittest.TestCase):
         with mock.patch("time.sleep"), contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(ObdError):
                 obd_scan.connect_any(elm, None)
+
+
+class VehicleMemoryTest(unittest.TestCase):
+    def test_vehicle_remembered_by_calibration_id(self):
+        import obd_scan
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("scan_logs")
+                report = {"calibration_id": "31205100", "note": "x"}
+                seen = []
+                fake_diag = lambda r, v, s, on_text: seen.append(v) or "ok"
+                answers = iter(["", "トヨタ アレックス NZE121", ""])
+                with mock.patch.object(obd_scan, "diagnose", fake_diag), \
+                        mock.patch.object(obd_scan, "ask", lambda prompt: next(answers)):
+                    obd_scan.run_ai(report, "1")
+                # 2 回目は車両を空 Enter → 覚えた名前が使われる
+                answers = iter(["", "", ""])
+                with mock.patch.object(obd_scan, "diagnose", fake_diag), \
+                        mock.patch.object(obd_scan, "ask", lambda prompt: next(answers)):
+                    obd_scan.run_ai(report, "2")
+                self.assertEqual(seen, ["トヨタ アレックス NZE121", "トヨタ アレックス NZE121"])
+            finally:
+                os.chdir(cwd)
 
 
 class FromScanTest(unittest.TestCase):

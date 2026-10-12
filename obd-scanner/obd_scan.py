@@ -173,12 +173,42 @@ def ask(prompt):
     return input(prompt).strip()
 
 
+VEHICLES_FILE = "vehicles.json"
+
+
+def load_vehicles():
+    try:
+        with open(VEHICLES_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def remember_vehicle(key, vehicle):
+    """較正 ID ごとに、入力された車両名を覚える（次回の既定値にする）。"""
+    if not key or not vehicle:
+        return
+    vehicles = load_vehicles()
+    vehicles[key] = vehicle
+    try:
+        with open(VEHICLES_FILE, "w", encoding="utf-8") as f:
+            json.dump(vehicles, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
 def run_ai(report, stamp, report_path=None):
     """車両情報・症状を聞いて Claude に診断させ、Markdown で保存する。"""
     print("\n" + "=" * 50)
     if ask("Claude に診断させますか？ [Enter = はい / n = いいえ]: ").lower() in ("n", "no", "いいえ"):
         return
-    vehicle = ask("車両（例: トヨタ bB QNC21 H28年 85000km）: ")
+    key = report.get("calibration_id") or report.get("vin")
+    known = load_vehicles().get(key, "") if key else ""
+    if known:
+        vehicle = ask(f"車両（Enter で「{known}」）: ") or known
+    else:
+        vehicle = ask("車両（例: トヨタ bB QNC21 H28年 85000km）: ")
+    remember_vehicle(key, vehicle)
     symptom = ask("症状・お客様の申告（例: アイドリングが不安定、警告灯が点いた）: ")
     print("\nClaude が診断しています...\n")
     try:
@@ -284,6 +314,7 @@ def main(argv=None):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"\n保存しました: {path}")
+    print(f"通信の記録: {raw_path}")
     if not args.no_ai:
         run_ai(report, stamp, report_path=path)
     return 0
