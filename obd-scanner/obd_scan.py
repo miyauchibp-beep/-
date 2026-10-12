@@ -53,6 +53,8 @@ def print_report(r):
         return
     if r.get("vin"):
         print(f"車台番号: {r['vin']}")
+    if r.get("calibration_id"):
+        print(f"較正 ID: {r['calibration_id']}")
     s = r.get("status")
     if s:
         print(f"警告灯(MIL): {'点灯' if s['mil'] else '消灯'}   エンジン: {s['ignition']}")

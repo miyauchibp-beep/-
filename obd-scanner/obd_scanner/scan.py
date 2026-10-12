@@ -40,8 +40,18 @@ def read_vin(elm):
 
     国内の車は車台番号が 17 桁でない（例: QNC21-1234567）ことも多く、対応していない車もある。
     """
+    return read_mode09_text(elm, 0x02)
+
+
+def read_calibration_id(elm):
+    """モード 09 PID 04 で ECU の較正 ID（ソフトの版）を読む。例: アレックス NZE121 は 31205100。"""
+    return read_mode09_text(elm, 0x04)
+
+
+def read_mode09_text(elm, pid):
+    """モード 09 の文字列（車台番号・較正 ID など）を読む。"""
     try:
-        bodies = elm.query(0x09, 0x02)
+        bodies = elm.query(0x09, pid)
     except ObdError:
         return None
     if not bodies:
@@ -181,6 +191,7 @@ def full_scan(elm, trend_seconds=10.0):
     supported = supported_pids(elm)
     report["supported_pids"] = [f"{p:02X}" for p in supported]
     report["vin"] = read_vin(elm)
+    report["calibration_id"] = read_calibration_id(elm)
     status = elm.query(0x01, 0x01) if 0x01 in supported else []
     if status and len(status[0]) >= 4:
         report["status"] = pids.decode_monitor_status(status[0])

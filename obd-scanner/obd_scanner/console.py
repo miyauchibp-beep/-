@@ -33,9 +33,10 @@ def ask_port(port):
         print("アダプタのポートは、Windows の「その他の Bluetooth 設定」→「COM ポート」で")
         print("「OBDII」の「発信」になっている番号です。")
         port = input(f"COM ポートを入力して Enter（何も入れなければ {default}）: ").strip() or default
-    port = port.upper()
     if port.isdigit():
         port = "COM" + port
+    elif port.upper().startswith("COM"):
+        port = port.upper()
     if port in FORBIDDEN_PORTS:
         print(f"{port} はスナップオン診断機（NANO-BT2）のポートなので使いません。")
         print("「OBDII」の「発信」になっている番号を指定してください。")

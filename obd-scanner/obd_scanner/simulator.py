@@ -10,12 +10,13 @@ import re
 
 class FakeElm327:
     def __init__(self, vehicle_protocol="4", needs_kw0=True, dtcs=("P0301", "P0420"),
-                 init_address="33", generic_obd=True):
+                 init_address="33", generic_obd=True, init_baud="10"):
         """init_address: ECU が返事をする初期化アドレス（国内独自の車は 33 以外）
         generic_obd: False なら共通規格（01/03）に答えず、KWP の 1A/21 だけ答える"""
         self.vehicle_protocol = vehicle_protocol
         self.needs_kw0 = needs_kw0
         self.init_address = init_address
+        self.init_baud = init_baud  # トヨタの古い K-line は 96（9600bps）
         self.generic_obd = generic_obd
         self.dtcs = list(dtcs)
         self.engine_running = True
@@ -32,6 +33,7 @@ class FakeElm327:
         self.connected = False
         self._just_connected = False
         self.iia = "33"
+        self.iib = "10"
         self.header = "C133F1"
 
     # シリアルポートと同じ read/write を持つ
@@ -74,6 +76,8 @@ class FakeElm327:
             self.keyword_check = arg == "KW1"
         elif arg.startswith("IIA"):
             self.iia = arg[3:]
+        elif arg.startswith("IB"):
+            self.iib = arg[2:]
         elif arg.startswith("SH"):
             self.header = arg[2:]
         elif arg.startswith("SP"):
@@ -90,6 +94,8 @@ class FakeElm327:
         if p not in ("0", self.vehicle_protocol):
             return "BUS INIT: ...ERROR" if p in "345" else "UNABLE TO CONNECT"
         target = self.iia if p in "34" else self.header[2:4]
+        if p in "34" and self.iib != self.init_baud:
+            return "BUS INIT: ...ERROR"
         if p != "0" and target != self.init_address:
             return "BUS INIT: ...ERROR" if p in "34" else "BUS INIT: ERROR"
         if p == "0" and self.init_address != "33":
@@ -122,6 +128,8 @@ class FakeElm327:
             "07": "47 00" if self._is_can else "47 00 00 00 00 00 00",
             "0A": "4A 00" if self._is_can else "4A 00 00 00 00 00 00",
             "0902": "014\r0: 49 02 01 4A 54 44\r1: 4B 42 32 30 55 30 30\r2: 31 32 33 34 35 36 37",
+            "0904": ("49 04 01 33 31 32 30\r49 04 02 35 31 30 30\r49 04 03 00 00 00 00\r49 04 04 00 00 00 00"
+                     if not self._is_can else "013\r0: 49 04 01 34 35 34 31\r1: 30 32 30 30 00 00 00\r2: 00 00 00 00 00 00 00"),
             # フリーズフレーム: P0301 で記録、回転数 1600rpm・水温 83℃
             "020200": "42 02 00 03 01" if self.dtcs else "42 02 00 00 00",
             "020C00": "42 0C 00 19 00",

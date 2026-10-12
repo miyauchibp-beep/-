@@ -76,6 +76,7 @@ class AskPortTest(unittest.TestCase):
         self.assertEqual(ask_port("7"), "COM7")
         self.assertIsNone(ask_port("4"))
         self.assertIsNone(ask_port("com5"))
+        self.assertEqual(ask_port("/dev/rfcomm0"), "/dev/rfcomm0")  # Linux のパスは大文字にしない
 
     def test_remembered_port_is_default(self):
         from unittest import mock
@@ -129,6 +130,7 @@ class ScanTest(unittest.TestCase):
         from obd_scanner.scan import full_scan
         r = full_scan(self._connected(), trend_seconds=0)
         self.assertEqual(r["vin"], "JTDKB20U001234567")
+        self.assertEqual(r["calibration_id"], "45410200")
         self.assertEqual([c["code"] for c in r["dtcs"]["stored"]], ["P0301", "P0420"])
         self.assertEqual(r["dtcs"]["pending"], [])
         self.assertTrue(r["status"]["mil"])
@@ -378,6 +380,41 @@ class KlineInitTestScript(unittest.TestCase):
         with mock.patch("obd_scanner.simulator.FakeElm327", return_value=fake):
             self.assertEqual(kline_init_test.main(["--demo", "--round", "4"]), 0)
         self.assertNotIn("ATZ", fake.sent)
+
+    def _toyota_kline(self):
+        # アレックス NZE121: 宛先 13・9600bps でだけ返事をする（Car Scanner のログより）
+        return FakeElm327(vehicle_protocol="4", needs_kw0=False, init_address="13", init_baud="96")
+
+    def test_toyota_kline_found_in_default_round(self):
+        import contextlib
+        import io
+        from unittest import mock
+        fake = self._toyota_kline()
+        out = io.StringIO()
+        with mock.patch("obd_scanner.simulator.FakeElm327", return_value=fake), contextlib.redirect_stdout(out):
+            self.assertEqual(kline_init_test.main(["--demo"]), 0)
+        text = out.getvalue()
+        self.assertIn("[ 3] トヨタ K-line（宛先 13・9600bps） ... 成功", text)
+        self.assertIn("ATSH8113F1 ATIB96 ATIIA13", text)
+
+    def test_generic_settings_fail_on_toyota_kline(self):
+        # 2026-10-12 の実車と同じく、宛先 33・10400bps の設定はすべて失敗する
+        fake = self._toyota_kline()
+        elm = Elm327(fake)
+        log = kline_init_test.Logger(os.path.join(self.tmp.name, "log.txt"))
+        results = [kline_init_test.try_variant(elm, log, p, extra, wait=0)
+                   for p, extra, _ in kline_init_test.ROUND1[:-1]]
+        log.close()
+        self.assertTrue(all(r is None for r in results))
+
+    def test_scan_on_toyota_kline(self):
+        from obd_scanner.scan import full_scan
+        elm = Elm327(self._toyota_kline())
+        elm.connect(protocol="4", extra_init=kline_init_test.TOYOTA_KWP)
+        self.assertTrue(elm.generic_obd)
+        r = full_scan(elm, trend_seconds=0)
+        self.assertEqual(r["calibration_id"], "31205100")
+        self.assertEqual([c["code"] for c in r["dtcs"]["stored"]], ["P0301", "P0420"])
 
     def test_refuses_snapon_ports(self):
         self.assertEqual(kline_init_test.main(["COM4"]), 2)
