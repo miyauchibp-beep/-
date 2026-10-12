@@ -89,6 +89,18 @@ class KlineInitTestScript(unittest.TestCase):
             self.assertEqual(kline_init_test.main(["--demo", "--round", "1", "--only", "10"]), 0)
         self.assertIn("→ プロトコル 6 ISO 15765-4 CAN", out.getvalue())
 
+    def test_default_run_connects_can_car_first(self):
+        # bB（CAN）でダブルクリック起動しても、最初の自動判別で成功して止まる
+        import contextlib
+        import io
+        from unittest import mock
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        out = io.StringIO()
+        with mock.patch("obd_scanner.simulator.FakeElm327", return_value=fake), contextlib.redirect_stdout(out):
+            self.assertEqual(kline_init_test.main(["--demo"]), 0)
+        self.assertIn("[ 1] 自動判別", out.getvalue())
+        self.assertNotIn("[ 2]", out.getvalue())
+
     def test_refuses_snapon_ports(self):
         self.assertEqual(kline_init_test.main(["COM4"]), 2)
         self.assertEqual(kline_init_test.main(["com5"]), 2)
@@ -110,6 +122,7 @@ class KlineInitTestScript(unittest.TestCase):
         self.assertTrue(all(r is None for _, r in results))
         elm, log, results = self._run(fake, 2)
         self.assertEqual([(e, r) for e, r in results if r], [(["ATKW0", "ATIIA10"], "init")])
+        self.assertEqual(kline_init_test.ROUND2[0][0], "0")  # 自動判別が先頭
         elm.connect(protocol="4", extra_init=["ATKW0", "ATIIA10"])
         answered = dict(kline_init_test.run_probes(elm, log))
         log.close()
