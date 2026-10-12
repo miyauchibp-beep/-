@@ -24,6 +24,7 @@ from datetime import datetime
 try:
     from obd_scanner.elm327 import PROTOCOLS, Elm327, ObdError, parse_response
     from obd_scanner.pids import decode_monitor_status, supported_from_bitmap
+    from obd_scanner.console import ask_port, run_from_console
 except ImportError:
     # ダブルクリック起動だと、ここで落ちると画面が一瞬で閉じてしまうので待つ
     print("obd_scanner フォルダが見つかりません。")
@@ -32,9 +33,6 @@ except ImportError:
     if os.name == "nt":
         input("\nEnter キーを押すと閉じます...")
     sys.exit(1)
-
-# スナップオン（NANO-BT2）が使うポート。OBD 車検に関わるので絶対に触らない
-FORBIDDEN_PORTS = {"COM4", "COM5"}
 
 # (プロトコル, 追加コマンド, 説明)
 # 1 回目: 一般的な設定。2026-10-12 のアレックスでは全滅（5baud の呼びかけに返事なし）
@@ -173,12 +171,8 @@ def main(argv=None):
         fake = FakeElm327() if args.round == 1 else FakeElm327(init_address="10", generic_obd=False)
         port, wait = fake, 0
     else:
-        if not args.port:
-            # ダブルクリックで起動したときはポートを聞く
-            args.port = input("アダプタの COM ポートを入力して Enter（何も入れなければ COM6）: ").strip() or "COM6"
-        if args.port.upper() in FORBIDDEN_PORTS:
-            print(f"{args.port} はスナップオン診断機（NANO-BT2）のポートなので使いません。")
-            print("ELM327 アダプタのポート（COM6）を指定してください。")
+        args.port = ask_port(args.port)
+        if args.port is None:
             return 2
         port, wait = args.port, args.wait
 
@@ -286,21 +280,5 @@ def main(argv=None):
     return 0 if found else 1
 
 
-def run_from_console():
-    """エラーでも画面がすぐ閉じないよう、最後に Enter を待つ。"""
-    code = 1
-    try:
-        code = main()
-    except KeyboardInterrupt:
-        print("\n中断しました。")
-    except Exception:
-        import traceback
-        print("\n予期しないエラーが出ました。この画面の文字をすべてコピーして Claude に送ってください。\n")
-        traceback.print_exc()
-    if os.name == "nt":
-        input("\nEnter キーを押すと閉じます...")
-    return code
-
-
 if __name__ == "__main__":
-    sys.exit(run_from_console())
+    sys.exit(run_from_console(main))

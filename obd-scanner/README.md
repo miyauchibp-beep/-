@@ -45,14 +45,26 @@ PC からだと `BUS INIT: ...ERROR` になり ECU に繋がりません（ス�
 - 車に送るのは**読み取りの要求（01 / 03 / 1A / 21）だけ**です。故障コードの消去や書き込みはしません
 - スナップオン診断機（NANO-BT2）の **COM4 / COM5 は指定しても拒否**します
 
+## 故障コード・ライブデータの読み取り（obd_scan.py）
+
+`run_scan.bat` をダブルクリック、または `python obd_scan.py COM6`。
+車台番号・警告灯・レディネス・故障コード（現在／保留中／消去不可）・フリーズフレーム・ライブデータを読み、
+`scan_logs\scan_日時.json` に保存します（あとで Claude に渡して診断させる用）。
+
+- ライブデータを表示し続ける: `python obd_scan.py COM6 --live`（`--csv` で記録も）
+- `working_init.json` があれば、その接続設定を使います
+
 ## 構成
 
 | ファイル | 内容 |
 | --- | --- |
+| `obd_scan.py` | 故障コード・フリーズフレーム・ライブデータの読み取りと保存 |
 | `kline_init_test.py` | K-line 初期化設定の自動テスト |
 | `obd_scanner/elm327.py` | アダプタとの通信、応答の解析（K-line / CAN 両対応） |
 | `obd_scanner/pids.py` | ライブデータ（回転数・水温など）の換算、レディネス |
 | `obd_scanner/dtc.py` | 故障コードの読み取りと日本語説明 |
+| `obd_scanner/scan.py` | 一通りの読み取り（モード 01/02/03/07/09/0A） |
+| `obd_scanner/console.py` | COM4/5 の拒否、終了前に画面を止める処理 |
 | `obd_scanner/simulator.py` | 動作確認用の疑似アダプタ |
 | `tests/` | テスト（`python -m unittest discover -s tests`） |
 

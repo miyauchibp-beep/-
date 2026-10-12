@@ -1,0 +1,160 @@
+"""車の故障コード・フリーズフレーム・ライブデータを読み取って保存する（読み取りのみ）。
+
+使い方（Windows）:
+    python obd_scan.py COM6            # 一通り読み取って scan_logs に保存
+    python obd_scan.py COM6 --live     # ライブデータを表示し続ける（Ctrl+C で終了）
+    python obd_scan.py --demo          # アダプタなしで動作確認
+
+kline_init_test.py が作った working_init.json があれば、その接続設定を使います。
+故障コードの消去や書き込みはしません。
+"""
+
+import argparse
+import csv
+import json
+import os
+import sys
+import time
+from datetime import datetime
+
+try:
+    from obd_scanner import pids
+    from obd_scanner.console import ask_port, run_from_console
+    from obd_scanner.elm327 import Elm327, ObdError
+    from obd_scanner.scan import full_scan, read_live, supported_pids
+except ImportError:
+    print("obd_scanner フォルダが見つかりません。obd_scan.py と同じ場所にフォルダごとコピーしてください。")
+    if os.name == "nt":
+        input("\nEnter キーを押すと閉じます...")
+    sys.exit(1)
+
+
+def load_init_settings(path="working_init.json"):
+    """kline_init_test.py が見つけた接続設定。なければ自動判別。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("protocol", "0"), data.get("extra_init", [])
+    except (OSError, ValueError):
+        return "0", []
+
+
+def print_report(r):
+    print(f"\n通信方式: {r['protocol']}   バッテリー電圧: {r.get('battery_voltage')} V")
+    if r.get("note"):
+        print(r["note"])
+        return
+    if r.get("vin"):
+        print(f"車台番号: {r['vin']}")
+    s = r.get("status")
+    if s:
+        print(f"警告灯(MIL): {'点灯' if s['mil'] else '消灯'}   エンジン: {s['ignition']}")
+        pending = [n for n, st in s["monitors"] if st == "未完了"]
+        print(f"レディネス: 未完了 {len(pending)} 項目" + (f"（{'、'.join(pending)}）" if pending else ""))
+
+    labels = {"stored": "故障コード（現在）", "pending": "故障コード（保留中）", "permanent": "故障コード（消去不可）"}
+    for key, label in labels.items():
+        codes = r["dtcs"][key]
+        print(f"\n■ {label}: {len(codes)} 件")
+        for c in codes:
+            print(f"   {c['code']}  {c['description']}")
+
+    ff = r.get("freeze_frame")
+    if ff:
+        print(f"\n■ フリーズフレーム（{ff['dtc']} 記録時）")
+        for v in ff["values"]:
+            print(f"   {v['name']:<16} {v['value']} {v['unit']}")
+
+    print("\n■ ライブデータ")
+    for v in r["live"]:
+        print(f"   {v['name']:<16} {v['value']} {v['unit']}")
+
+
+def live_loop(elm, csv_path=None, interval=0.5):
+    supported = set(supported_pids(elm))
+    pid_list = [p for p in pids.DEFAULT_LIVE if p in supported]
+    if not pid_list:
+        print("ライブデータに対応した項目がありません。")
+        return
+    writer = f = None
+    if csv_path:
+        f = open(csv_path, "w", newline="", encoding="utf-8-sig")  # Excel で文字化けしないよう BOM 付き
+        writer = csv.writer(f)
+        writer.writerow(["時刻"] + [f"{pids.PIDS[p].name}({pids.PIDS[p].unit})" for p in pid_list])
+    print("ライブデータ（Ctrl+C で終了）")
+    try:
+        while True:
+            values = read_live(elm, pid_list)
+            if os.name == "nt":
+                os.system("cls")
+            else:
+                print("\033[H\033[J", end="")
+            print(f"ライブデータ {datetime.now():%H:%M:%S}（Ctrl+C で終了）\n")
+            for v in values:
+                print(f"  {v['name']:<16} {v['value']:>8} {v['unit']}")
+            if writer:
+                by_pid = {v["pid"]: v["value"] for v in values}
+                writer.writerow([datetime.now().isoformat(timespec="seconds")]
+                                + [by_pid.get(f"{p:02X}", "") for p in pid_list])
+                f.flush()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\n終了しました。")
+    finally:
+        if f:
+            f.close()
+            print(f"記録: {csv_path}")
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="OBD2 の故障コード・ライブデータを読み取る")
+    ap.add_argument("port", nargs="?", help="アダプタの COM ポート（例: COM6）")
+    ap.add_argument("--baudrate", type=int, default=38400)
+    ap.add_argument("--live", action="store_true", help="ライブデータを表示し続ける")
+    ap.add_argument("--csv", action="store_true", help="--live のとき CSV にも記録する")
+    ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
+    args = ap.parse_args(argv)
+
+    if args.demo:
+        from obd_scanner.simulator import FakeElm327
+        port = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        protocol, extra = "0", []
+    else:
+        port = ask_port(args.port)
+        if port is None:
+            return 2
+        protocol, extra = load_init_settings()
+
+    try:
+        elm = Elm327(port, baudrate=args.baudrate)
+        print("車両に接続しています...")
+        elm.connect(protocol=protocol, extra_init=extra)
+    except ObdError as e:
+        print(f"接続できません: {e}")
+        print("・スマホの Bluetooth をオフ / Car Scanner を閉じましたか？")
+        print("・キーは ON ですか？ 古い車は kline_init_test.py（run_kline_test.bat）で設定を探してください")
+        return 1
+    print(f"接続しました: {elm.protocol_name}")
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs("scan_logs", exist_ok=True)
+    try:
+        if args.live:
+            live_loop(elm, os.path.join("scan_logs", f"live_{stamp}.csv") if args.csv else None)
+            return 0
+        print("読み取り中です（30 秒ほどかかります）...")
+        report = full_scan(elm)
+        report["scanned_at"] = datetime.now().isoformat(timespec="seconds")
+    finally:
+        elm.close()
+
+    print_report(report)
+    path = os.path.join("scan_logs", f"scan_{stamp}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+    print(f"\n保存しました: {path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run_from_console(main))

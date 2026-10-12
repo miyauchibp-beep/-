@@ -1,0 +1,134 @@
+"""接続済みの Elm327 から、診断に必要なデータを一通り読み取る（読み取りのみ）。"""
+
+from . import dtc, pids
+from .elm327 import ObdError, parse_response
+
+
+def supported_pids(elm):
+    """PID 00/20/40/... を順に問い合わせ、対応 PID の一覧を返す。"""
+    supported = []
+    base = 0x00
+    while base <= 0xC0:
+        try:
+            bodies = elm.query(0x01, base)
+        except ObdError:
+            break
+        if not bodies:
+            break
+        found = pids.supported_from_bitmap(base, bodies[0])
+        supported.extend(found)
+        if base + 0x20 not in found:
+            break
+        base += 0x20
+    return supported
+
+
+def _freeze_query(elm, pid, frame=0):
+    """モード 02（フリーズフレーム）。応答は 42 PID フレーム番号 データ。"""
+    raw = elm.send_raw(f"02{pid:02X}{frame:02X}")
+    results = []
+    for msg in parse_response(raw):
+        if len(msg) >= 3 and msg[0] == 0x42 and msg[1] == pid and msg[2] == frame:
+            results.append(msg[3:])
+    return results
+
+
+def read_vin(elm):
+    """モード 09 PID 02 で車台番号を読む。読めなければ None。
+
+    国内の車は車台番号が 17 桁でない（例: QNC21-1234567）ことも多く、対応していない車もある。
+    """
+    try:
+        bodies = elm.query(0x09, 0x02)
+    except ObdError:
+        return None
+    if not bodies:
+        return None
+    if len(bodies) == 1:
+        data = bodies[0][1:]  # CAN: 先頭はデータ項目数
+    else:
+        # K-line: 1 行ごとに 連番 + 4 バイト
+        data = [b for body in sorted(bodies, key=lambda x: x[0]) for b in body[1:]]
+    text = "".join(chr(b) for b in data if 0x20 < b < 0x7F)
+    return text or None
+
+
+def read_dtcs(elm):
+    """現在・保留中・消せない（永久）故障コードを読む。"""
+    result = {}
+    for mode, key in ((0x03, "stored"), (0x07, "pending"), (0x0A, "permanent")):
+        try:
+            codes = dtc.parse_dtc_response(elm.query(mode), elm.is_can)
+        except ObdError:
+            codes = []
+        result[key] = [{"code": c, "description": dtc.describe(c)} for c in codes]
+    return result
+
+
+def read_live(elm, pid_list):
+    """指定 PID の現在値を 1 回ずつ読む。"""
+    values = []
+    for pid in pid_list:
+        p = pids.PIDS.get(pid)
+        if p is None:
+            continue
+        try:
+            bodies = elm.query(0x01, pid)
+        except ObdError:
+            continue
+        if not bodies:
+            continue
+        decoded = pids.decode(pid, bodies[0])
+        if decoded is not None:
+            values.append({"pid": f"{pid:02X}", "name": p.name, "value": decoded[0], "unit": decoded[1]})
+    return values
+
+
+def read_freeze_frame(elm):
+    """フリーズフレーム（故障が記録された瞬間のデータ）を読む。記録がなければ None。"""
+    try:
+        cause = _freeze_query(elm, 0x02)
+    except ObdError:
+        return None
+    if not cause or cause[0][:2] in ([0, 0], []):
+        return None
+    code = dtc.decode_pair(cause[0][0], cause[0][1]) if len(cause[0]) >= 2 else None
+    values = []
+    for pid in pids.DEFAULT_LIVE + [0x03, 0x05, 0x0D]:
+        p = pids.PIDS.get(pid)
+        if p is None or any(v["pid"] == f"{pid:02X}" for v in values):
+            continue
+        try:
+            bodies = _freeze_query(elm, pid)
+        except ObdError:
+            continue
+        if bodies:
+            decoded = pids.decode(pid, bodies[0])
+            if decoded is not None:
+                values.append({"pid": f"{pid:02X}", "name": p.name, "value": decoded[0], "unit": decoded[1]})
+    return {"dtc": code, "description": dtc.describe(code) if code else "", "values": values}
+
+
+def full_scan(elm):
+    """診断に使うデータを一通り読み、辞書にまとめる。"""
+    report = {
+        "adapter": elm.version,
+        "protocol": f"{elm.protocol} {elm.protocol_name}",
+        "generic_obd": elm.generic_obd,
+        "battery_voltage": elm.battery_voltage(),
+    }
+    if not elm.generic_obd:
+        report["note"] = "共通規格（01 00）に答えない ECU のため、読み取れる項目が限られます"
+        return report
+    supported = supported_pids(elm)
+    report["supported_pids"] = [f"{p:02X}" for p in supported]
+    report["vin"] = read_vin(elm)
+    status = elm.query(0x01, 0x01) if 0x01 in supported else []
+    if status and len(status[0]) >= 4:
+        report["status"] = pids.decode_monitor_status(status[0])
+    report["dtcs"] = read_dtcs(elm)
+    # PID 02（記録の原因 DTC）はモード 02 専用で、モード 01 の対応一覧には出ないので常に試す
+    report["freeze_frame"] = read_freeze_frame(elm)
+    live_pids = [p for p in pids.PIDS if p in supported]
+    report["live"] = read_live(elm, live_pids)
+    return report

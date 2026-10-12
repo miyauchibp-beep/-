@@ -68,6 +68,49 @@ class ConnectTest(unittest.TestCase):
         self.assertEqual(codes, ["P0301", "P0420"])
 
 
+class ScanTest(unittest.TestCase):
+    def _connected(self, **kw):
+        elm = Elm327(FakeElm327(vehicle_protocol="6", needs_kw0=False, **kw))
+        elm.connect()
+        return elm
+
+    def test_full_scan_on_can_car(self):
+        from obd_scanner.scan import full_scan
+        r = full_scan(self._connected())
+        self.assertEqual(r["vin"], "JTDKB20U001234567")
+        self.assertEqual([c["code"] for c in r["dtcs"]["stored"]], ["P0301", "P0420"])
+        self.assertEqual(r["dtcs"]["pending"], [])
+        self.assertTrue(r["status"]["mil"])
+        ff = r["freeze_frame"]
+        self.assertEqual(ff["dtc"], "P0301")
+        self.assertIn({"pid": "0C", "name": "エンジン回転数", "value": 1600, "unit": "rpm"}, ff["values"])
+        self.assertIn("0C", [v["pid"] for v in r["live"]])
+
+    def test_scan_without_dtcs(self):
+        from obd_scanner.scan import full_scan
+        r = full_scan(self._connected(dtcs=()))
+        self.assertEqual(r["dtcs"]["stored"], [])
+        self.assertFalse(r["status"]["mil"])
+        self.assertIsNone(r["freeze_frame"])
+
+    def test_non_generic_ecu_is_reported(self):
+        from obd_scanner.scan import full_scan
+        elm = Elm327(FakeElm327(init_address="10", generic_obd=False))
+        elm.connect(protocol="4", extra_init=["ATKW0", "ATIIA10"])
+        r = full_scan(elm)
+        self.assertFalse(r["generic_obd"])
+        self.assertIn("note", r)
+
+    def test_scan_sends_no_clear_or_write(self):
+        from obd_scanner.scan import full_scan
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        elm = Elm327(fake)
+        elm.connect()
+        full_scan(elm)
+        modes = {c[:2] for c in fake.sent if not c.startswith("AT")}
+        self.assertTrue(modes <= {"01", "02", "03", "07", "09", "0A"}, modes)
+
+
 class KlineInitTestScript(unittest.TestCase):
     def setUp(self):
         self.cwd = os.getcwd()
@@ -148,10 +191,12 @@ class KlineInitTestScript(unittest.TestCase):
 class BatFileTest(unittest.TestCase):
     def test_bat_is_ascii_with_crlf(self):
         # LF 改行や日本語が入ると、cmd.exe がコマンドを読み違える
-        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "run_kline_test.bat")
-        data = open(path, "rb").read()
-        data.decode("ascii")
-        self.assertEqual(data.count(b"\n"), data.count(b"\r\n"))
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for name in ("run_kline_test.bat", "run_scan.bat"):
+            with open(os.path.join(root, name), "rb") as f:
+                data = f.read()
+            data.decode("ascii")
+            self.assertEqual(data.count(b"\n"), data.count(b"\r\n"), name)
 
 
 if __name__ == "__main__":

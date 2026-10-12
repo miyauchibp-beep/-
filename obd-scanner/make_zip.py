@@ -5,6 +5,8 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FILES = [
+    "obd_scan.py",
+    "run_scan.bat",
     "kline_init_test.py",
     "run_kline_test.bat",
     "obd_scanner/__init__.py",
@@ -12,17 +14,28 @@ FILES = [
     "obd_scanner/pids.py",
     "obd_scanner/dtc.py",
     "obd_scanner/simulator.py",
+    "obd_scanner/scan.py",
+    "obd_scanner/console.py",
 ]
 
-README = """OBD テスト（K-line 接続テスト）
+README = """OBD スキャンツール
 
-使い方
-  1. スマホの Bluetooth をオフ、Car Scanner を閉じる
-  2. 車にアダプタをさして、キーを ON（エンジンは OFF のままでよい）
-  3. このフォルダの run_kline_test.bat をダブルクリック
-     （青い「PC が保護されました」が出たら「詳細情報」→「実行」）
-  4. 数分待つ。最後に「Enter キーを押すと閉じます」と出たら、
-     画面の文字を全部コピーして Claude に貼る
+準備
+  スマホの Bluetooth をオフ、Car Scanner を閉じる。
+  車にアダプタをさして、キーを ON（エンジンは OFF のままでよい）。
+  （青い「PC が保護されました」が出たら「詳細情報」→「実行」）
+
+■ run_scan.bat … 故障コード・フリーズフレーム・ライブデータを読む
+  結果は scan_logs フォルダに保存されます（scan_日時.json）。
+  ライブデータを見続けたいときは、このフォルダのアドレス欄に cmd と入れて Enter し、
+    python obd_scan.py COM6 --live
+  （CSV にも記録するなら --live --csv。Ctrl+C で終了）
+
+■ run_kline_test.bat … 繋がらない車で、接続設定を探す
+  繋がった設定は working_init.json に保存され、run_scan.bat が自動で使います。
+
+どちらも最後に「Enter キーを押すと閉じます」と出たら、
+画面の文字を全部コピーして Claude に貼ってください。
 
 車に送るのは読み取りだけです。故障コードの消去などはしません。
 COM4 / COM5（スナップオン）は使いません。

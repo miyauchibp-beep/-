@@ -98,14 +98,32 @@ class FakeElm327:
         self._just_connected = True
         return ""
 
+    @property
+    def _is_can(self):
+        return self.vehicle_protocol in "6789"
+
     def _obd(self, cmd):
-        prefix = "BUS INIT: ...OK\r" if self.protocol != "0" else "SEARCHING...\r"
+        if self._is_can:
+            prefix = "SEARCHING...\r" if self.protocol == "0" else ""
+        else:
+            prefix = "BUS INIT: ...OK\r" if self.protocol != "0" else "SEARCHING...\r"
         table = {
             "0100": "41 00 BE 3E B8 11",
-            "0101": f"41 01 {0x80 | len(self.dtcs):02X} 07 65 00",
+            "0101": f"41 01 {(0x80 if self.dtcs else 0) | len(self.dtcs):02X} 07 65 00",
             "010C": "41 0C 0C 80",
             "010D": "41 0D 00",
             "0105": "41 05 7B",
+            "0104": "41 04 40",
+            "0111": "41 11 26",
+            "010F": "41 0F 3C",
+            "0120": "41 20 00 00 00 00",
+            "07": "47 00" if self._is_can else "47 00 00 00 00 00 00",
+            "0A": "4A 00" if self._is_can else "4A 00 00 00 00 00 00",
+            "0902": "014\r0: 49 02 01 4A 54 44\r1: 4B 42 32 30 55 30 30\r2: 31 32 33 34 35 36 37",
+            # フリーズフレーム: P0301 で記録、回転数 1600rpm・水温 83℃
+            "020200": "42 02 00 03 01" if self.dtcs else "42 02 00 00 00",
+            "020C00": "42 0C 00 19 00",
+            "020500": "42 05 00 7B",
         }
         if not self.generic_obd:
             reply = {"1A80": "5A 80 38 39 36 36 31", "2101": "61 01 00 7B 0C 80"}.get(cmd)
@@ -116,10 +134,14 @@ class FakeElm327:
             for code in self.dtcs:
                 n = int(code[1:], 16) | ("PCBU".index(code[0]) << 14)
                 body += [f"{n >> 8:02X}", f"{n & 0xFF:02X}"]
-            while len(body) % 6:
-                body.append("00")
-            lines = ["43 " + " ".join(body[i:i + 6]) for i in range(0, len(body), 6)]
-            reply = "\r".join(lines) if lines else "43 00 00 00 00 00 00"
+            if self._is_can:
+                # CAN は先頭に件数が付く
+                reply = " ".join(["43", f"{len(self.dtcs):02X}"] + body)
+            else:
+                while len(body) % 6:
+                    body.append("00")
+                lines = ["43 " + " ".join(body[i:i + 6]) for i in range(0, len(body), 6)]
+                reply = "\r".join(lines) if lines else "43 00 00 00 00 00 00"
         else:
             reply = table.get(cmd, "NO DATA")
         text = (prefix if self._just_connected else "") + reply
