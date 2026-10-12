@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import types
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -109,6 +110,82 @@ class ScanTest(unittest.TestCase):
         full_scan(elm)
         modes = {c[:2] for c in fake.sent if not c.startswith("AT")}
         self.assertTrue(modes <= {"01", "02", "03", "07", "09", "0A"}, modes)
+
+
+class _FakeStream:
+    def __init__(self, chunks, stop_reason):
+        self.text_stream = iter(chunks)
+        self._msg = types.SimpleNamespace(
+            stop_reason=stop_reason,
+            content=[types.SimpleNamespace(type="thinking", thinking=""),
+                     types.SimpleNamespace(type="text", text="".join(chunks))])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_final_message(self):
+        return self._msg
+
+
+class _FakeClient:
+    """Claude API の代わり。送られた引数を記録し、決まった文を返す。"""
+
+    def __init__(self, chunks=("## 見立て\n", "問題なし"), stop_reason="end_turn"):
+        self.calls = []
+        outer = self
+
+        class _Messages:
+            def stream(self, **kw):
+                outer.calls.append(kw)
+                return _FakeStream(list(chunks), stop_reason)
+
+        self.beta = types.SimpleNamespace(messages=_Messages())
+
+
+class AiDiagTest(unittest.TestCase):
+    REPORT = {"protocol": "6 ISO 15765-4 CAN", "dtcs": {"stored": [{"code": "P0301", "description": "1番気筒 失火"}]}}
+
+    def test_diagnose_streams_and_returns_text(self):
+        from obd_scanner.ai_diag import diagnose
+        client = _FakeClient()
+        got = []
+        text = diagnose(self.REPORT, "トヨタ bB QNC21", "アイドリング不安定", client=client, on_text=got.append)
+        self.assertEqual(text, "## 見立て\n問題なし")
+        self.assertEqual("".join(got), text)
+        kw = client.calls[0]
+        self.assertEqual(kw["model"], "claude-opus-5-5")
+        self.assertEqual(kw["fallbacks"], "default")
+        self.assertEqual(kw["betas"], ["server-side-fallback-2026-07-01"])
+        self.assertNotIn("thinking", kw)  # Opus 5.5 は thinking を無効にできない
+        content = kw["messages"][0]["content"]
+        for word in ("トヨタ bB QNC21", "アイドリング不安定", "P0301"):
+            self.assertIn(word, content)
+
+    def test_refusal_is_reported(self):
+        from obd_scanner.ai_diag import AiDiagError, diagnose
+        with self.assertRaises(AiDiagError):
+            diagnose(self.REPORT, client=_FakeClient(chunks=(), stop_reason="refusal"))
+
+    def test_truncated_answer_is_marked(self):
+        from obd_scanner.ai_diag import diagnose
+        text = diagnose(self.REPORT, client=_FakeClient(stop_reason="max_tokens"))
+        self.assertIn("途中で切れました", text)
+
+    def test_missing_api_key_message(self):
+        from obd_scanner.ai_diag import AiDiagError, diagnose
+
+        class _NoKey:
+            class beta:
+                class messages:
+                    @staticmethod
+                    def stream(**kw):
+                        raise TypeError("Could not resolve authentication method.")
+        with self.assertRaises(AiDiagError) as cm:
+            diagnose(self.REPORT, client=_NoKey())
+        self.assertIn("ANTHROPIC_API_KEY", str(cm.exception))
 
 
 class KlineInitTestScript(unittest.TestCase):

@@ -45,11 +45,18 @@ PC からだと `BUS INIT: ...ERROR` になり ECU に繋がりません（ス�
 - 車に送るのは**読み取りの要求（01 / 03 / 1A / 21）だけ**です。故障コードの消去や書き込みはしません
 - スナップオン診断機（NANO-BT2）の **COM4 / COM5 は指定しても拒否**します
 
-## 故障コード・ライブデータの読み取り（obd_scan.py）
+## 故障コード・ライブデータの読み取りと AI 診断（obd_scan.py）
 
 `run_scan.bat` をダブルクリック、または `python obd_scan.py COM6`。
 車台番号・警告灯・レディネス・故障コード（現在／保留中／消去不可）・フリーズフレーム・ライブデータを読み、
-`scan_logs\scan_日時.json` に保存します（あとで Claude に渡して診断させる用）。
+`scan_logs\scan_日時.json` に保存します。
+
+続けて車両情報と症状を聞き、Claude（`claude-opus-5-5`）に原因候補（可能性順）・確認手順・修理方法を出させて
+`scan_logs\diag_日時.md` に保存します。
+
+- API キーは環境変数 `ANTHROPIC_API_KEY`（Windows: `setx ANTHROPIC_API_KEY "sk-ant-..."` のあと画面を開き直す）
+- 安全上の判定で断られたときは、サーバー側で別モデルに自動で切り替える設定（`fallbacks: "default"`）にしています
+- 診断しない: `--no-ai` ／ 保存済みの結果で診断し直す: `--from-scan scan_logs\scan_日時.json`
 
 - ライブデータを表示し続ける: `python obd_scan.py COM6 --live`（`--csv` で記録も）
 - `working_init.json` があれば、その接続設定を使います
@@ -64,6 +71,7 @@ PC からだと `BUS INIT: ...ERROR` になり ECU に繋がりません（ス�
 | `obd_scanner/pids.py` | ライブデータ（回転数・水温など）の換算、レディネス |
 | `obd_scanner/dtc.py` | 故障コードの読み取りと日本語説明 |
 | `obd_scanner/scan.py` | 一通りの読み取り（モード 01/02/03/07/09/0A） |
+| `obd_scanner/ai_diag.py` | Claude API による診断（原因候補・確認手順・修理方法） |
 | `obd_scanner/console.py` | COM4/5 の拒否、終了前に画面を止める処理 |
 | `obd_scanner/simulator.py` | 動作確認用の疑似アダプタ |
 | `tests/` | テスト（`python -m unittest discover -s tests`） |

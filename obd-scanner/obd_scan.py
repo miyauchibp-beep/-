@@ -1,9 +1,13 @@
-"""車の故障コード・フリーズフレーム・ライブデータを読み取って保存する（読み取りのみ）。
+r"""車の故障コード・フリーズフレーム・ライブデータを読み取り、Claude に診断させる（車へは読み取りのみ）。
 
 使い方（Windows）:
-    python obd_scan.py COM6            # 一通り読み取って scan_logs に保存
+    python obd_scan.py COM6            # 読み取って保存 → 車両情報・症状を聞いて Claude が診断
+    python obd_scan.py COM6 --no-ai    # 読み取りと保存だけ
     python obd_scan.py COM6 --live     # ライブデータを表示し続ける（Ctrl+C で終了）
+    python obd_scan.py --from-scan scan_logs\scan_20261012_121847.json   # 保存済みの結果で診断し直す
     python obd_scan.py --demo          # アダプタなしで動作確認
+
+Claude の診断には、環境変数 ANTHROPIC_API_KEY に API キーを設定しておく必要があります。
 
 kline_init_test.py が作った working_init.json があれば、その接続設定を使います。
 故障コードの消去や書き込みはしません。
@@ -19,6 +23,7 @@ from datetime import datetime
 
 try:
     from obd_scanner import pids
+    from obd_scanner.ai_diag import AiDiagError, diagnose
     from obd_scanner.console import ask_port, run_from_console
     from obd_scanner.elm327 import Elm327, ObdError
     from obd_scanner.scan import full_scan, read_live, supported_pids
@@ -106,6 +111,39 @@ def live_loop(elm, csv_path=None, interval=0.5):
             print(f"記録: {csv_path}")
 
 
+def ask(prompt):
+    """対話できるときだけ聞く（テストやリダイレクト時は空文字）。"""
+    if not sys.stdin or not sys.stdin.isatty():
+        return ""
+    return input(prompt).strip()
+
+
+def run_ai(report, stamp, report_path=None):
+    """車両情報・症状を聞いて Claude に診断させ、Markdown で保存する。"""
+    print("\n" + "=" * 50)
+    if ask("Claude に診断させますか？ [Enter = はい / n = いいえ]: ").lower() in ("n", "no", "いいえ"):
+        return
+    vehicle = ask("車両（例: トヨタ bB QNC21 H28年 85000km）: ")
+    symptom = ask("症状・お客様の申告（例: アイドリングが不安定、警告灯が点いた）: ")
+    print("\nClaude が診断しています...\n")
+    try:
+        text = diagnose(report, vehicle, symptom, on_text=lambda t: print(t, end="", flush=True))
+    except AiDiagError as e:
+        print(f"診断できませんでした: {e}")
+        return
+    print()
+    md_path = os.path.join("scan_logs", f"diag_{stamp}.md")
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(f"# 診断メモ {datetime.now():%Y-%m-%d %H:%M}\n\n")
+        f.write(f"- 車両: {vehicle or '（未入力）'}\n- 症状: {symptom or '（未入力）'}\n\n")
+        f.write(text + "\n\n---\nClaude による候補です。最終判断は実車で確認してください。\n")
+    if report_path:
+        report["ai_diagnosis"] = {"vehicle": vehicle, "symptom": symptom, "text": text}
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+    print(f"\n診断メモを保存しました: {md_path}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="OBD2 の故障コード・ライブデータを読み取る")
     ap.add_argument("port", nargs="?", help="アダプタの COM ポート（例: COM6）")
@@ -113,7 +151,20 @@ def main(argv=None):
     ap.add_argument("--live", action="store_true", help="ライブデータを表示し続ける")
     ap.add_argument("--csv", action="store_true", help="--live のとき CSV にも記録する")
     ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
+    ap.add_argument("--no-ai", action="store_true", help="Claude による診断をしない")
+    ap.add_argument("--from-scan", metavar="JSON", help="保存済みのスキャン結果で Claude に診断させる（車に繋がない）")
     args = ap.parse_args(argv)
+
+    os.makedirs("scan_logs", exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if args.from_scan:
+        with open(args.from_scan, encoding="utf-8") as f:
+            report = json.load(f)
+        report.pop("ai_diagnosis", None)
+        print_report(report)
+        run_ai(report, stamp)
+        return 0
 
     if args.demo:
         from obd_scanner.simulator import FakeElm327
@@ -136,8 +187,6 @@ def main(argv=None):
         return 1
     print(f"接続しました: {elm.protocol_name}")
 
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.makedirs("scan_logs", exist_ok=True)
     try:
         if args.live:
             live_loop(elm, os.path.join("scan_logs", f"live_{stamp}.csv") if args.csv else None)
@@ -153,6 +202,8 @@ def main(argv=None):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"\n保存しました: {path}")
+    if not args.no_ai:
+        run_ai(report, stamp, report_path=path)
     return 0
 
 

@@ -16,6 +16,7 @@ FILES = [
     "obd_scanner/simulator.py",
     "obd_scanner/scan.py",
     "obd_scanner/console.py",
+    "obd_scanner/ai_diag.py",
 ]
 
 README = """OBD スキャンツール
@@ -25,8 +26,13 @@ README = """OBD スキャンツール
   車にアダプタをさして、キーを ON（エンジンは OFF のままでよい）。
   （青い「PC が保護されました」が出たら「詳細情報」→「実行」）
 
-■ run_scan.bat … 故障コード・フリーズフレーム・ライブデータを読む
-  結果は scan_logs フォルダに保存されます（scan_日時.json）。
+■ run_scan.bat … 故障コード・フリーズフレーム・ライブデータを読み、Claude が診断
+  読み取り後に「車両」「症状」を聞かれるので入力（空のまま Enter でも可）。
+  結果は scan_logs フォルダに保存されます（scan_日時.json、診断は diag_日時.md）。
+  Claude の診断には API キーが必要です。未設定なら、コマンドプロンプトで一度だけ
+    setx ANTHROPIC_API_KEY "sk-ant-で始まるキー"
+  を実行し、画面を開き直してください。
+  保存済みの結果で診断し直す: python obd_scan.py --from-scan scan_logs\scan_日時.json
   ライブデータを見続けたいときは、このフォルダのアドレス欄に cmd と入れて Enter し、
     python obd_scan.py COM6 --live
   （CSV にも記録するなら --live --csv。Ctrl+C で終了）
