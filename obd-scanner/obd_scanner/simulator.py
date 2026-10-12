@@ -9,9 +9,14 @@ import re
 
 
 class FakeElm327:
-    def __init__(self, vehicle_protocol="4", needs_kw0=True, dtcs=("P0301", "P0420")):
+    def __init__(self, vehicle_protocol="4", needs_kw0=True, dtcs=("P0301", "P0420"),
+                 init_address="33", generic_obd=True):
+        """init_address: ECU が返事をする初期化アドレス（国内独自の車は 33 以外）
+        generic_obd: False なら共通規格（01/03）に答えず、KWP の 1A/21 だけ答える"""
         self.vehicle_protocol = vehicle_protocol
         self.needs_kw0 = needs_kw0
+        self.init_address = init_address
+        self.generic_obd = generic_obd
         self.dtcs = list(dtcs)
         self._out = bytearray()
         self.sent = []
@@ -24,6 +29,8 @@ class FakeElm327:
         self.spaces = True
         self.connected = False
         self._just_connected = False
+        self.iia = "33"
+        self.header = "C133F1"
 
     # シリアルポートと同じ read/write を持つ
     def write(self, data):
@@ -63,6 +70,10 @@ class FakeElm327:
             self.spaces = arg == "S1"
         elif arg in ("KW0", "KW1"):
             self.keyword_check = arg == "KW1"
+        elif arg.startswith("IIA"):
+            self.iia = arg[3:]
+        elif arg.startswith("SH"):
+            self.header = arg[2:]
         elif arg.startswith("SP"):
             self.protocol = arg[2:].lstrip("A") or "0"
             self.connected = False
@@ -76,6 +87,11 @@ class FakeElm327:
         p = self.protocol
         if p not in ("0", self.vehicle_protocol):
             return "BUS INIT: ...ERROR" if p in "345" else "UNABLE TO CONNECT"
+        target = self.iia if p in "34" else self.header[2:4]
+        if p != "0" and target != self.init_address:
+            return "BUS INIT: ...ERROR" if p in "34" else "BUS INIT: ERROR"
+        if p == "0" and self.init_address != "33":
+            return "SEARCHING...\rUNABLE TO CONNECT"
         if self.needs_kw0 and self.keyword_check:
             return "BUS INIT: ...ERROR" if p != "0" else "SEARCHING...\rUNABLE TO CONNECT"
         self.connected = True
@@ -91,7 +107,11 @@ class FakeElm327:
             "010D": "41 0D 00",
             "0105": "41 05 7B",
         }
-        if cmd == "03":
+        if not self.generic_obd:
+            reply = {"1A80": "5A 80 38 39 36 36 31", "2101": "61 01 00 7B 0C 80"}.get(cmd)
+            if reply is None:
+                reply = f"7F {cmd[:2]} 11"  # このサービスには対応していない
+        elif cmd == "03":
             body = []
             for code in self.dtcs:
                 n = int(code[1:], 16) | ("PCBU".index(code[0]) << 14)

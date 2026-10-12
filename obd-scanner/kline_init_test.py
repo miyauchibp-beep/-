@@ -3,9 +3,10 @@
 使い方（Windows）:
     python kline_init_test.py COM6
     python kline_init_test.py COM6 --all      # 成功しても最後まで全部試す
+    python kline_init_test.py COM6 --round 1  # 1 回目（一般的な設定）をもう一度
     python kline_init_test.py --demo          # アダプタなしで動作確認
 
-車両に送るのは読み取りの要求（01 00 / 01 01）だけです。
+車両に送るのは読み取りの要求（01 / 03 / 1A / 21）だけです。
 故障コードの消去や書き込みは一切しません。
 
 結果:
@@ -35,10 +36,11 @@ except ImportError:
 # スナップオン（NANO-BT2）が使うポート。OBD 車検に関わるので絶対に触らない
 FORBIDDEN_PORTS = {"COM4", "COM5"}
 
-# (プロトコル, 追加コマンド, 説明)  上から可能性の高い順
-VARIANTS = [
-    ("4", [], "基本: KWP 5baud初期化（今まで失敗していた設定）"),
-    ("4", ["ATKW0"], "キーワード検査オフ（互換品で最も効きやすい）"),
+# (プロトコル, 追加コマンド, 説明)
+# 1 回目: 一般的な設定。2026-10-12 のアレックスでは全滅（5baud の呼びかけに返事なし）
+ROUND1 = [
+    ("4", [], "基本: KWP 5baud初期化"),
+    ("4", ["ATKW0"], "キーワード検査オフ"),
     ("4", ["ATKW0", "ATAT0", "ATSTFF"], "キーワード検査オフ + 応答待ちを最大に"),
     ("4", ["ATKW0", "ATIIA33", "ATIB10"], "キーワード検査オフ + 初期化アドレス33・10400bps明示"),
     ("4", ["ATKW0", "ATSH8110F1"], "キーワード検査オフ + エンジンECU(10)を直接指定"),
@@ -48,6 +50,20 @@ VARIANTS = [
     ("3", ["ATKW0"], "ISO 9141-2 + キーワード検査オフ"),
     ("0", [], "自動判別"),
 ]
+
+# 2 回目: 呼びかける宛先（初期化アドレス）を変える。
+# 共通規格の 33 には返事がなかったので、国内向けの ECU が使いそうな宛先を順に試す
+_INIT_ADDRESSES = ["01", "10", "11", "12", "13", "15", "17", "18", "1A", "28", "58", "02"]
+ROUND2 = [("4", ["ATKW0", f"ATIIA{a}"], f"5baud初期化 宛先 {a}") for a in _INIT_ADDRESSES] + [
+    ("5", ["ATKW0", f"ATSH81{a}F1"], f"高速初期化 宛先 {a}") for a in ["10", "11", "01"]
+]
+
+ROUNDS = {1: ROUND1, 2: ROUND2}
+
+# 初期化に成功したあとに送る読み取り要求（すべて読み取りのみ）
+#   01 00/01 01 … 共通規格の対応PID・警告灯   03 … 故障コード
+#   1A 80/1A 9B … KWP の ECU 情報読み取り      21 01 … メーカー独自データの読み取り
+PROBES = ["0100", "0101", "03", "1A80", "1A9B", "2101"]
 
 
 class Logger:
@@ -75,7 +91,12 @@ def exchange(elm, log, cmd, timeout=None):
 
 
 def try_variant(elm, log, protocol, extra, wait):
-    """1 つの設定で初期化を試す。成功なら 0100 の応答を返す。"""
+    """1 つの設定で初期化を試す。
+
+    返り値: "ok"   … 共通規格（01 00）に答えた
+            "init" … 初期化は成功したが、01 00 には答えなかった（国内独自の可能性）
+            None   … 初期化に失敗
+    """
     exchange(elm, log, "ATPC", timeout=3)
     if wait:
         time.sleep(wait)  # K-line は前回の初期化失敗から数秒あけないと受け付けないことがある
@@ -92,7 +113,26 @@ def try_variant(elm, log, protocol, extra, wait):
         messages = parse_response(reply)
     except ObdError:
         return None
-    return reply if any(m[:2] == [0x41, 0x00] for m in messages) else None
+    if any(m[:2] == [0x41, 0x00] for m in messages):
+        return "ok"
+    upper = reply.upper()
+    if ("BUS INIT" in upper and "OK" in upper) or messages:
+        return "init"
+    return None
+
+
+def run_probes(elm, log):
+    """初期化できたあと、読み取り要求を順に送って、答えたものを返す。"""
+    answered = []
+    for cmd in PROBES:
+        reply = exchange(elm, log, cmd, timeout=5)
+        try:
+            messages = parse_response(reply)
+        except ObdError:
+            continue
+        if messages:
+            answered.append((cmd, " | ".join(" ".join(f"{b:02X}" for b in m) for m in messages)))
+    return answered
 
 
 def summarize_success(elm, log):
@@ -120,16 +160,20 @@ def main(argv=None):
     ap.add_argument("--wait", type=float, default=5.0, help="設定の切り替え前に待つ秒数（既定5）")
     ap.add_argument("--all", action="store_true", help="成功しても全部試す")
     ap.add_argument("--only", type=int, nargs="+", help="試す番号だけ指定（例: --only 2 3）")
+    ap.add_argument("--round", type=int, choices=sorted(ROUNDS), default=2,
+                    help="試す設定の組（1: 一般的な設定、2: 宛先を変える。既定 2）")
     ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
     args = ap.parse_args(argv)
 
     if args.demo:
         from obd_scanner.simulator import FakeElm327
-        port, wait = FakeElm327(), 0
-    elif not args.port:
-        # ダブルクリックで起動したときはポートを聞く
-        args.port = input("アダプタの COM ポートを入力して Enter（何も入れなければ COM6）: ").strip() or "COM6"
+        # 1 回目: 宛先 33 でキーワード検査が引っかかる車 / 2 回目: 宛先 10 の国内独自の車
+        fake = FakeElm327() if args.round == 1 else FakeElm327(init_address="10", generic_obd=False)
+        port, wait = fake, 0
     else:
+        if not args.port:
+            # ダブルクリックで起動したときはポートを聞く
+            args.port = input("アダプタの COM ポートを入力して Enter（何も入れなければ COM6）: ").strip() or "COM6"
         if args.port.upper() in FORBIDDEN_PORTS:
             print(f"{args.port} はスナップオン診断機（NANO-BT2）のポートなので使いません。")
             print("ELM327 アダプタのポート（COM6）を指定してください。")
@@ -139,7 +183,7 @@ def main(argv=None):
     os.makedirs("kline_logs", exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log = Logger(os.path.join("kline_logs", f"kline_test_{stamp}.txt"))
-    log.write(f"K-line 初期化テスト {datetime.now():%Y-%m-%d %H:%M:%S}  ポート: {args.port or 'デモ'}")
+    log.write(f"K-line 初期化テスト {datetime.now():%Y-%m-%d %H:%M:%S}  ポート: {args.port or 'デモ'}  第{args.round}回の設定")
 
     try:
         elm = Elm327(port, baudrate=args.baudrate)
@@ -168,7 +212,7 @@ def main(argv=None):
     except ValueError:
         pass
 
-    variants = list(enumerate(VARIANTS, 1))
+    variants = list(enumerate(ROUNDS[args.round], 1))
     if args.only:
         variants = [v for v in variants if v[0] in args.only]
 
@@ -177,14 +221,27 @@ def main(argv=None):
     for no, (protocol, extra, label) in variants:
         print(f"[{no:>2}] {label} ... ", end="", flush=True)
         log.write(f"\n[{no}] プロトコル{protocol} {' '.join(extra) or '(追加なし)'}  {label}")
-        reply = try_variant(elm, log, protocol, extra, wait)
-        if reply:
+        status = try_variant(elm, log, protocol, extra, wait)
+        if status == "ok":
             print("成功")
             details = summarize_success(elm, log)
             for line in details:
                 print(f"       {line}")
             log.write("  => 成功: " + " / ".join(details))
-            found.append({"no": no, "protocol": protocol, "extra_init": extra, "label": label})
+            found.append({"no": no, "protocol": protocol, "extra_init": extra, "label": label,
+                          "generic_obd": True})
+            if not args.all:
+                break
+        elif status == "init":
+            print("初期化は成功（共通規格の質問には無回答）")
+            log.write("  => 初期化成功。読み取り要求を試す")
+            answered = run_probes(elm, log)
+            for cmd, data in answered:
+                print(f"       {cmd} → {data}")
+            if not answered:
+                print("       どの読み取り要求にも返事なし")
+            found.append({"no": no, "protocol": protocol, "extra_init": extra, "label": label,
+                          "generic_obd": False, "answered": answered})
             if not args.all:
                 break
         else:
@@ -203,6 +260,7 @@ def main(argv=None):
             "protocol": best["protocol"],
             "extra_init": best["extra_init"],
             "label": best["label"],
+            "generic_obd": best["generic_obd"],
             "found_at": datetime.now().isoformat(timespec="seconds"),
             "all_success": found,
         }
@@ -215,9 +273,10 @@ def main(argv=None):
     else:
         print("どの設定でも繋がりませんでした。")
         print("次の手:")
-        print("  1. 安定化電源で 13.5V 前後にする、またはエンジンをかけてから再実行")
-        print("  2. Car Scanner の通信ログを保存して、送っているコマンドを比べる")
-        print("  3. 改善しなければ、アダプタの買い替え（OBDLink 系）を検討")
+        print("  1. Car Scanner の通信ログ・接続設定を見て、送っているコマンドを比べる")
+        print("  2. 安定化電源で 13.5V 前後にする、またはエンジンをかけてから再実行")
+        if args.round == 2:
+            print("  （1 回目の設定をもう一度試すなら: python kline_init_test.py COM6 --round 1）")
     print(f"記録: {log.path}")
     return 0 if found else 1
 

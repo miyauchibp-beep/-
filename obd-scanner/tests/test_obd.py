@@ -83,17 +83,42 @@ class KlineInitTestScript(unittest.TestCase):
         self.assertEqual(kline_init_test.main(["com5"]), 2)
 
     def test_demo_finds_kw0(self):
-        self.assertEqual(kline_init_test.main(["--demo"]), 0)
+        self.assertEqual(kline_init_test.main(["--demo", "--round", "1"]), 0)
+
+    def _run(self, fake, round_no):
+        elm = Elm327(fake)
+        log = kline_init_test.Logger(os.path.join(self.tmp.name, "log.txt"))
+        results = [(extra, kline_init_test.try_variant(elm, log, p, extra, wait=0))
+                   for p, extra, _ in kline_init_test.ROUNDS[round_no]]
+        return elm, log, results
+
+    def test_round2_finds_non_standard_init_address(self):
+        # 2026-10-12 の実車ログと同じく、宛先 33 には返事がない ECU
+        fake = FakeElm327(init_address="10", generic_obd=False)
+        _, _, results = self._run(fake, 1)
+        self.assertTrue(all(r is None for _, r in results))
+        elm, log, results = self._run(fake, 2)
+        self.assertEqual([(e, r) for e, r in results if r], [(["ATKW0", "ATIIA10"], "init")])
+        elm.connect(protocol="4", extra_init=["ATKW0", "ATIIA10"])
+        answered = dict(kline_init_test.run_probes(elm, log))
+        log.close()
+        self.assertEqual(sorted(answered), ["0100", "0101", "03", "1A80", "1A9B", "2101"])
+        self.assertEqual(answered["2101"], "61 01 00 7B 0C 80")
+        self.assertEqual(answered["0100"], "7F 01 11")
 
     def test_only_sends_read_requests(self):
         fake = FakeElm327()
         elm = Elm327(fake)
         log = kline_init_test.Logger(os.path.join(self.tmp.name, "log.txt"))
-        for protocol, extra, _ in kline_init_test.VARIANTS:
-            kline_init_test.try_variant(elm, log, protocol, extra, wait=0)
+        for variants in kline_init_test.ROUNDS.values():
+            for protocol, extra, _ in variants:
+                kline_init_test.try_variant(elm, log, protocol, extra, wait=0)
+        kline_init_test.run_probes(elm, log)
         log.close()
         obd_requests = {c for c in fake.sent if not c.startswith("AT")}
-        self.assertEqual(obd_requests, {"0100"})
+        # 読み取り系（01, 03, 1A, 21）だけ。消去(04)や書き込み系は送らない
+        self.assertTrue(obd_requests <= set(kline_init_test.PROBES))
+        self.assertFalse({c[:2] for c in obd_requests} & {"04", "14", "2E", "3B", "31", "10", "11"})
 
 
 class BatFileTest(unittest.TestCase):

@@ -123,6 +123,7 @@ class Elm327:
         self.version = ""
         self.protocol = ""
         self.protocol_name = ""
+        self.generic_obd = False
 
     @property
     def is_can(self):
@@ -176,8 +177,13 @@ class Elm327:
         self.send_raw(f"ATSP{protocol}", timeout=3)
         for cmd in extra_init:
             self.send_raw(cmd, timeout=3)
-        # 最初の要求でプロトコルの自動判別が行われる
-        if not self.query(0x01, 0x00, timeout=20):
+        # 最初の要求で初期化（プロトコルの自動判別）が行われる。
+        # 平成20年ごろより前の国内車は、初期化できても 01 00 に答えない（7F 01 11 等）ことがあるので、
+        # 何か返事があれば接続できたとみなす
+        raw = self.send_raw("0100", timeout=20)
+        messages = parse_response(raw)  # BUS INIT: ...ERROR 等はここで ObdError
+        self.generic_obd = any(m[:2] == [0x41, 0x00] for m in messages)
+        if not messages and not ("BUS INIT" in raw.upper() and "OK" in raw.upper()):
             raise ObdError(
                 "車両から応答がありません。イグニッション ON か、エンジンがかかっているか確認してください"
             )
