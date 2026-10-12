@@ -105,10 +105,16 @@ def supported_from_bitmap(base, data):
 def decode_monitor_status(data):
     """PID 01（MIL・DTC 数・レディネス）の解析。
 
-    返り値: {"mil": bool, "dtc_count": int, "ignition": "火花点火"/"圧縮着火",
-             "monitors": [(名前, 状態), ...]}  状態は "完了" / "未完了"
+    返り値: {"mil": bool, "dtc_count": int, "ignition": "火花点火"/"圧縮着火" または None,
+             "monitors": [(名前, 状態), ...], "readiness_available": bool}  状態は "完了" / "未完了"
+
+    本来は 4 バイトだが、古いトヨタ（アレックス NZE121）は 1 バイト（MIL と DTC 数）しか返さない。
     """
-    a, b, c, d = data[:4]
+    a = data[0]
+    if len(data) < 4:
+        return {"mil": bool(a & 0x80), "dtc_count": a & 0x7F, "ignition": None,
+                "monitors": [], "readiness_available": False}
+    b, c, d = data[1:4]
     compression = bool(b & 0x08)
     monitors = []
     common = [("失火", 0), ("燃料系", 1), ("包括部品", 2)]
@@ -127,4 +133,5 @@ def decode_monitor_status(data):
         "dtc_count": a & 0x7F,
         "ignition": "圧縮着火（ディーゼル）" if compression else "火花点火（ガソリン）",
         "monitors": monitors,
+        "readiness_available": True,
     }

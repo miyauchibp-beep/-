@@ -171,7 +171,7 @@ def summarize_success(elm, log):
         if bodies:
             lines.append(f"対応PID(01-20): {len(supported_from_bitmap(0, bodies[0]))} 個")
         status = elm.query(0x01, 0x01)
-        if status and len(status[0]) >= 4:
+        if status and status[0]:
             s = decode_monitor_status(status[0])
             lines.append(f"警告灯(MIL): {'点灯' if s['mil'] else '消灯'} / 故障コード件数: {s['dtc_count']}")
     except ObdError as e:

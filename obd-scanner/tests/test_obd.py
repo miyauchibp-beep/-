@@ -38,6 +38,13 @@ class DecodeTest(unittest.TestCase):
     def test_rpm(self):
         self.assertEqual(pids.decode(0x0C, [0x1A, 0xF8]), (1726, "rpm"))
 
+    def test_short_monitor_status(self):
+        # 2026-10-12 アレックス NZE121 の実際の応答: "41 01 00"
+        st = pids.decode_monitor_status([0x00])
+        self.assertEqual((st["mil"], st["dtc_count"], st["readiness_available"]), (False, 0, False))
+        st = pids.decode_monitor_status([0x82])
+        self.assertEqual((st["mil"], st["dtc_count"]), (True, 2))
+
     def test_o2_locations(self):
         self.assertEqual(pids.decode(0x13, [0x03]), ("B1S1、B1S2", ""))
         self.assertEqual(pids.decode(0x13, [0x01]), ("B1S1", ""))
@@ -273,6 +280,54 @@ class AiDiagTest(unittest.TestCase):
         with self.assertRaises(AiDiagError) as cm:
             diagnose(self.REPORT, client=_NoKey())
         self.assertIn("ANTHROPIC_API_KEY", str(cm.exception))
+
+
+class ReplayAdapter:
+    """実車の通信記録（scan_logs/raw_*.txt）の応答をそのまま返す疑似アダプタ。"""
+
+    def __init__(self, path):
+        self.replies = {}
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("> "):
+                    cmd, _, reply = line[2:].rstrip("\n").partition(" ")
+                    self.replies.setdefault(cmd, reply.strip().replace(" | ", "\r"))
+        self._out = bytearray()
+
+    def write(self, data):
+        cmd = data.decode("ascii").strip().upper()
+        reply = self.replies.get(cmd, "OK" if cmd.startswith("AT") else "NO DATA")
+        self._out.extend((reply + "\r\r>").encode("ascii"))
+
+    def read(self, size=1):
+        chunk = bytes(self._out[:size])
+        del self._out[:size]
+        return chunk
+
+
+class RealNze121Test(unittest.TestCase):
+    """2026-10-12 アレックス NZE121（エンジン稼働中）の実際の応答で読み取る。"""
+
+    def setUp(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "nze121_raw_20261012.txt")
+        self.elm = Elm327(ReplayAdapter(path))
+        self.elm.connect(protocol="4", extra_init=["ATSH8113F1", "ATIB96", "ATIIA13"])
+
+    def test_full_scan(self):
+        from obd_scanner.scan import full_scan
+        r = full_scan(self.elm, trend_seconds=0)
+        self.assertEqual(r["calibration_id"], "31205100")
+        self.assertIsNone(r["vin"])
+        self.assertEqual(r["status"]["mil"], False)
+        self.assertEqual(r["status"]["dtc_count"], 0)
+        self.assertFalse(r["status"]["readiness_available"])
+        self.assertEqual(r["dtcs"]["stored"], [])
+        self.assertIsNone(r["freeze_frame"])
+        live = {v["pid"]: v["value"] for v in r["live"]}
+        self.assertEqual(live["0C"], 589)       # 09 34 → 2356 / 4
+        self.assertEqual(live["15"], 0.0)       # リア O2 は ECU が 0V と返している
+        self.assertEqual(live["14"], 0.055)
+        self.assertTrue(r["engine_running"])
 
 
 class ConnectAnyTest(unittest.TestCase):

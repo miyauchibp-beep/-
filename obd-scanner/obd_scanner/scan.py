@@ -193,7 +193,7 @@ def full_scan(elm, trend_seconds=10.0):
     report["vin"] = read_vin(elm)
     report["calibration_id"] = read_calibration_id(elm)
     status = elm.query(0x01, 0x01) if 0x01 in supported else []
-    if status and len(status[0]) >= 4:
+    if status and status[0]:
         report["status"] = pids.decode_monitor_status(status[0])
     report["dtcs"] = read_dtcs(elm)
     # PID 02（記録の原因 DTC）はモード 02 専用で、モード 01 の対応一覧には出ないので常に試す

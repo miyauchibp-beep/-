@@ -97,9 +97,15 @@ def print_report(r):
         print(f"較正 ID: {r['calibration_id']}")
     s = r.get("status")
     if s:
-        print(f"警告灯(MIL): {'点灯' if s['mil'] else '消灯'}   エンジン: {s['ignition']}")
-        pending = [n for n, st in s["monitors"] if st == "未完了"]
-        print(f"レディネス: 未完了 {len(pending)} 項目" + (f"（{'、'.join(pending)}）" if pending else ""))
+        line = f"警告灯(MIL): {'点灯' if s['mil'] else '消灯'}"
+        if s.get("ignition"):
+            line += f"   エンジン: {s['ignition']}"
+        print(line)
+        if s.get("readiness_available", True):
+            pending = [n for n, st in s["monitors"] if st == "未完了"]
+            print(f"レディネス: 未完了 {len(pending)} 項目" + (f"（{'、'.join(pending)}）" if pending else ""))
+        else:
+            print("レディネス: この車の ECU は返しません")
 
     labels = {"stored": "故障コード（現在）", "pending": "故障コード（保留中）", "permanent": "故障コード（消去不可）"}
     for key, label in labels.items():
