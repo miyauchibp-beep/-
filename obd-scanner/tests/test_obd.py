@@ -78,7 +78,7 @@ class ScanTest(unittest.TestCase):
 
     def test_full_scan_on_can_car(self):
         from obd_scanner.scan import full_scan
-        r = full_scan(self._connected())
+        r = full_scan(self._connected(), trend_seconds=0)
         self.assertEqual(r["vin"], "JTDKB20U001234567")
         self.assertEqual([c["code"] for c in r["dtcs"]["stored"]], ["P0301", "P0420"])
         self.assertEqual(r["dtcs"]["pending"], [])
@@ -88,9 +88,31 @@ class ScanTest(unittest.TestCase):
         self.assertIn({"pid": "0C", "name": "エンジン回転数", "value": 1600, "unit": "rpm"}, ff["values"])
         self.assertIn("0C", [v["pid"] for v in r["live"]])
 
+    def test_trend_when_engine_running(self):
+        from obd_scanner.scan import full_scan
+        r = full_scan(self._connected(), trend_seconds=0.2)
+        self.assertTrue(r["engine_running"])
+        items = {it["pid"]: it for it in r["trend"]["items"]}
+        self.assertEqual(set(items), {"14", "15", "06", "0C"})
+        front = items["14"]
+        self.assertEqual((front["min"], front["max"]), (0.2, 0.7))
+        self.assertGreater(front["switches"], 2)
+        self.assertNotIn("switches", items["15"])
+        self.assertEqual(front["count"], len(front["values"]))
+
+    def test_no_trend_when_engine_off(self):
+        from obd_scanner.scan import full_scan
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        fake.engine_running = False
+        elm = Elm327(fake)
+        elm.connect()
+        r = full_scan(elm, trend_seconds=0.2)
+        self.assertFalse(r["engine_running"])
+        self.assertNotIn("trend", r)
+
     def test_scan_without_dtcs(self):
         from obd_scanner.scan import full_scan
-        r = full_scan(self._connected(dtcs=()))
+        r = full_scan(self._connected(dtcs=()), trend_seconds=0)
         self.assertEqual(r["dtcs"]["stored"], [])
         self.assertFalse(r["status"]["mil"])
         self.assertIsNone(r["freeze_frame"])
@@ -164,6 +186,10 @@ class AiDiagTest(unittest.TestCase):
         content = kw["messages"][0]["content"]
         for word in ("トヨタ bB QNC21", "アイドリング不安定", "P0301"):
             self.assertIn(word, content)
+
+    def test_prompt_explains_trend(self):
+        from obd_scanner.ai_diag import SYSTEM_PROMPT
+        self.assertIn("switches", SYSTEM_PROMPT)
 
     def test_prompt_explains_operating_time_counters(self):
         # 2026-10-12 の bB で「379分 = 約6時間前に消去」と誤読したため

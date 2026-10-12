@@ -1,5 +1,7 @@
 """接続済みの Elm327 から、診断に必要なデータを一通り読み取る（読み取りのみ）。"""
 
+import time
+
 from . import dtc, pids
 from .elm327 import ObdError, parse_response
 
@@ -109,8 +111,64 @@ def read_freeze_frame(elm):
     return {"dtc": code, "description": dtc.describe(code) if code else "", "values": values}
 
 
-def full_scan(elm):
-    """診断に使うデータを一通り読み、辞書にまとめる。"""
+# エンジン稼働中に続けて読む項目（O2 センサの反転・触媒の働き・燃料補正のばらつきを見る）
+TREND_PIDS = [0x14, 0x15, 0x06, 0x0C]
+O2_RICH_LEAN_THRESHOLD = 0.45  # V。これをまたいだら「反転」と数える
+
+
+def sample_trend(elm, supported, seconds=10.0, max_samples=200):
+    """数秒間くり返し読み、項目ごとの最小・最大・平均と、フロント O2 の反転回数をまとめる。
+
+    1 回の値では O2 センサが反転しているか判断できないため。
+    Bluetooth 経由だと 1 周 0.3〜0.5 秒かかるので、速い反転は数え漏れることがある。
+    """
+    pid_list = [p for p in TREND_PIDS if p in supported]
+    if not pid_list:
+        return None
+    series = {p: [] for p in pid_list}
+    # フロント O2 は速く動くので、ほかの項目の合間に毎回はさんで読む
+    order = pid_list
+    if 0x14 in pid_list:
+        others = [p for p in pid_list if p != 0x14]
+        order = [0x14] + [x for p in others for x in (p, 0x14)]
+    start = time.monotonic()
+    rounds = 0
+    while time.monotonic() - start < seconds and rounds < max_samples:
+        for v in read_live(elm, order):
+            series[int(v["pid"], 16)].append(v["value"])
+        rounds += 1
+    elapsed = time.monotonic() - start
+    items = []
+    for pid, values in series.items():
+        if not values:
+            continue
+        p = pids.PIDS[pid]
+        item = {
+            "pid": f"{pid:02X}", "name": p.name, "unit": p.unit, "count": len(values),
+            "interval_sec": round(elapsed / len(values), 2),
+            "min": min(values), "max": max(values), "avg": round(sum(values) / len(values), 3),
+            "values": values,
+        }
+        if pid == 0x14:
+            sides = [v > O2_RICH_LEAN_THRESHOLD for v in values]
+            item["switches"] = sum(1 for a, b in zip(sides, sides[1:]) if a != b)
+        items.append(item)
+    return {
+        "seconds": round(elapsed, 1),
+        "rounds": rounds,
+        "items": items,
+    }
+
+
+def engine_running(live):
+    return any(v["pid"] == "0C" and v["value"] > 0 for v in live)
+
+
+def full_scan(elm, trend_seconds=10.0):
+    """診断に使うデータを一通り読み、辞書にまとめる。
+
+    エンジンがかかっていれば、trend_seconds 秒間続けて読んだ傾向（trend）も加える。
+    """
     report = {
         "adapter": elm.version,
         "protocol": f"{elm.protocol} {elm.protocol_name}",
@@ -131,4 +189,7 @@ def full_scan(elm):
     report["freeze_frame"] = read_freeze_frame(elm)
     live_pids = [p for p in pids.PIDS if p in supported]
     report["live"] = read_live(elm, live_pids)
+    report["engine_running"] = engine_running(report["live"])
+    if report["engine_running"] and trend_seconds > 0:
+        report["trend"] = sample_trend(elm, supported, trend_seconds)
     return report

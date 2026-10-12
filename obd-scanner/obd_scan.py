@@ -76,6 +76,17 @@ def print_report(r):
     for v in r["live"]:
         print(f"   {v['name']:<16} {v['value']} {v['unit']}")
 
+    t = r.get("trend")
+    if t:
+        print(f"\n■ {t['seconds']} 秒間の動き")
+        for it in t["items"]:
+            line = f"   {it['name']:<16} 最小 {it['min']} ／ 最大 {it['max']} ／ 平均 {it['avg']} {it['unit']}"
+            if "switches" in it:
+                line += f"  （0.45V をまたいだ回数: {it['switches']} 回、約 {it['interval_sec']} 秒ごとに読み取り）"
+            print(line)
+    elif r.get("engine_running") is False:
+        print("\n（エンジン停止中のため、O2 センサなどの動きは見ていません）")
+
 
 def live_loop(elm, csv_path=None, interval=0.5):
     supported = set(supported_pids(elm))
@@ -154,6 +165,8 @@ def main(argv=None):
     ap.add_argument("--csv", action="store_true", help="--live のとき CSV にも記録する")
     ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
     ap.add_argument("--no-ai", action="store_true", help="Claude による診断をしない")
+    ap.add_argument("--trend", type=float, default=10.0, metavar="秒",
+                    help="エンジン稼働中に続けて読む秒数（既定 10、0 で読まない）")
     ap.add_argument("--from-scan", metavar="JSON", nargs="?", const="latest",
                     help="保存済みのスキャン結果で Claude に診断させる（車に繋がない）。省略時は最新のもの")
     args = ap.parse_args(argv)
@@ -201,8 +214,8 @@ def main(argv=None):
         if args.live:
             live_loop(elm, os.path.join("scan_logs", f"live_{stamp}.csv") if args.csv else None)
             return 0
-        print("読み取り中です（30 秒ほどかかります）...")
-        report = full_scan(elm)
+        print("読み取り中です（30 秒ほど。エンジンがかかっていれば、さらに O2 センサなどの動きを見ます）...")
+        report = full_scan(elm, trend_seconds=args.trend)
         report["scanned_at"] = datetime.now().isoformat(timespec="seconds")
     finally:
         elm.close()

@@ -18,6 +18,8 @@ class FakeElm327:
         self.init_address = init_address
         self.generic_obd = generic_obd
         self.dtcs = list(dtcs)
+        self.engine_running = True
+        self._tick = 0  # O2 センサなどを時間で変化させるためのカウンタ
         self._out = bytearray()
         self.sent = []
         self._reset()
@@ -110,7 +112,7 @@ class FakeElm327:
         table = {
             "0100": "41 00 BE 3E B8 11",
             "0101": f"41 01 {(0x80 if self.dtcs else 0) | len(self.dtcs):02X} 07 65 00",
-            "010C": "41 0C 0C 80",
+            "010C": "41 0C 0C 80" if self.engine_running else "41 0C 00 00",
             "010D": "41 0D 00",
             "0105": "41 05 7B",
             "0104": "41 04 40",
@@ -125,6 +127,15 @@ class FakeElm327:
             "020C00": "42 0C 00 19 00",
             "020500": "42 05 00 7B",
         }
+        if cmd in ("0114", "0115", "0106"):
+            self._tick += 1
+        # フロント O2 は 0.2V と 0.7V を 2 回ごとに行き来、リア O2 は 0.65V 前後で安定
+        front = 0x8C if (self._tick // 2) % 2 else 0x28
+        table["0114"] = f"41 14 {front:02X} FF"
+        table["0115"] = f"41 15 {0x82 + self._tick % 2:02X} FF"
+        table["0106"] = f"41 06 {0x7C + self._tick % 8:02X}"
+        if not self.engine_running:
+            table["0114"] = "41 14 02 FF"
         if not self.generic_obd:
             reply = {"1A80": "5A 80 38 39 36 36 31", "2101": "61 01 00 7B 0C 80"}.get(cmd)
             if reply is None:
