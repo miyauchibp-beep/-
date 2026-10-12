@@ -4,6 +4,7 @@ r"""車の故障コード・フリーズフレーム・ライブデータを読�
     python obd_scan.py COM7            # 読み取って保存 → 車両情報・症状を聞いて Claude が診断
     python obd_scan.py COM7 --no-ai    # 読み取りと保存だけ
     python obd_scan.py COM7 --live     # ライブデータを表示し続ける（Ctrl+C で終了）
+    python obd_scan.py COM7 --live --pids o2 --csv   # O2 センサ 2 つと回転数だけを速く表示・記録
     python obd_scan.py --from-scan scan_logs\scan_20261012_121847.json   # 保存済みの結果で診断し直す
     python obd_scan.py --from-scan     # ファイル名を省くと、いちばん新しい読み取り結果を使う
     python obd_scan.py --demo          # アダプタなしで動作確認
@@ -136,9 +137,16 @@ def print_report(r):
         print("\n（エンジン停止中のため、O2 センサなどの動きは見ていません）")
 
 
-def live_loop(elm, csv_path=None, interval=0.5):
+def parse_pid_list(text):
+    """"15,14,0C" や "o2" を PID の一覧にする。"""
+    if text.strip().lower() == "o2":
+        return [0x14, 0x15, 0x0C]
+    return [int(x, 16) for x in text.replace(" ", "").split(",") if x]
+
+
+def live_loop(elm, csv_path=None, interval=0.5, only=None):
     supported = set(supported_pids(elm))
-    pid_list = [p for p in pids.DEFAULT_LIVE if p in supported]
+    pid_list = [p for p in (only or pids.DEFAULT_LIVE) if p in supported and p in pids.PIDS]
     if not pid_list:
         print("ライブデータに対応した項目がありません。")
         return
@@ -160,7 +168,7 @@ def live_loop(elm, csv_path=None, interval=0.5):
                 print(f"  {v['name']:<16} {v['value']:>8} {v['unit']}")
             if writer:
                 by_pid = {v["pid"]: v["value"] for v in values}
-                writer.writerow([datetime.now().isoformat(timespec="seconds")]
+                writer.writerow([datetime.now().isoformat(timespec="milliseconds")]
                                 + [by_pid.get(f"{p:02X}", "") for p in pid_list])
                 f.flush()
             time.sleep(interval)
@@ -241,6 +249,8 @@ def main(argv=None):
     ap.add_argument("--baudrate", type=int, default=38400)
     ap.add_argument("--live", action="store_true", help="ライブデータを表示し続ける")
     ap.add_argument("--csv", action="store_true", help="--live のとき CSV にも記録する")
+    ap.add_argument("--pids", metavar="一覧",
+                    help="--live で見る項目を絞る（例: 15 や 15,14,0C。o2 で O2 センサ 2 つと回転数）。少ないほど速く更新")
     ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
     ap.add_argument("--no-ai", action="store_true", help="Claude による診断をしない")
     ap.add_argument("--trend", type=float, default=10.0, metavar="秒",
@@ -306,7 +316,9 @@ def main(argv=None):
 
     try:
         if args.live:
-            live_loop(elm, os.path.join("scan_logs", f"live_{stamp}.csv") if args.csv else None)
+            live_loop(elm, os.path.join("scan_logs", f"live_{stamp}.csv") if args.csv else None,
+                      interval=0 if args.pids else 0.5,
+                      only=parse_pid_list(args.pids) if args.pids else None)
             return 0
         print("読み取り中です（30 秒ほど。エンジンがかかっていれば、さらに O2 センサなどの動きを見ます）...")
         report = full_scan(elm, trend_seconds=args.trend)

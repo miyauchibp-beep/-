@@ -381,6 +381,14 @@ class ConnectAnyTest(unittest.TestCase):
                 obd_scan.connect_any(elm, None)
 
 
+class PidListTest(unittest.TestCase):
+    def test_parse(self):
+        import obd_scan
+        self.assertEqual(obd_scan.parse_pid_list("15"), [0x15])
+        self.assertEqual(obd_scan.parse_pid_list("15, 14,0C"), [0x15, 0x14, 0x0C])
+        self.assertEqual(obd_scan.parse_pid_list("O2"), [0x14, 0x15, 0x0C])
+
+
 class VehicleMemoryTest(unittest.TestCase):
     def test_vehicle_remembered_by_calibration_id(self):
         import obd_scan
