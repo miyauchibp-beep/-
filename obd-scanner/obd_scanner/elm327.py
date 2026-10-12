@@ -115,6 +115,11 @@ class Elm327:
                 self._io = serial.Serial(port, baudrate=baudrate, timeout=0.1)
                 self._is_serial = True
             except serial.SerialException as e:
+                if "PermissionError" in str(e) or "Access is denied" in str(e) or "アクセスが拒否" in str(e):
+                    raise ObdError(
+                        f"ポート {port} はほかのアプリが使用中です。スマホの Bluetooth をオフにし、"
+                        "ほかの黒い画面を閉じて、アダプタを抜き差ししてからやり直してください"
+                    ) from e
                 raise ObdError(f"ポート {port} を開けません: {e}") from e
         else:
             self._io = port

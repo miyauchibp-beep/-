@@ -56,6 +56,19 @@ class DecodeTest(unittest.TestCase):
         self.assertIn("メーカー独自", dtc.describe("P1349"))
 
 
+class PortOpenTest(unittest.TestCase):
+    def test_port_in_use_message(self):
+        # 2026-10-12、スマホがアダプタを掴んだまま COM6 を開いたときの Windows のエラー
+        from unittest import mock
+        import serial
+        err = serial.SerialException(
+            "could not open port 'COM6': PermissionError(13, 'アクセスが拒否されました。', None, 5)")
+        with mock.patch("serial.Serial", side_effect=err):
+            with self.assertRaises(ObdError) as cm:
+                Elm327("COM6")
+        self.assertIn("ほかのアプリが使用中", str(cm.exception))
+
+
 class ConnectTest(unittest.TestCase):
     def test_connect_fails_without_kw0(self):
         with self.assertRaises(ObdError):
