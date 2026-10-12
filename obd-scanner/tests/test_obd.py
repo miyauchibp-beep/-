@@ -165,6 +165,11 @@ class AiDiagTest(unittest.TestCase):
         for word in ("トヨタ bB QNC21", "アイドリング不安定", "P0301"):
             self.assertIn(word, content)
 
+    def test_prompt_explains_operating_time_counters(self):
+        # 2026-10-12 の bB で「379分 = 約6時間前に消去」と誤読したため
+        from obd_scanner.ai_diag import SYSTEM_PROMPT
+        self.assertIn("時計の経過時間ではない", SYSTEM_PROMPT)
+
     def test_refusal_is_reported(self):
         from obd_scanner.ai_diag import AiDiagError, diagnose
         with self.assertRaises(AiDiagError):
