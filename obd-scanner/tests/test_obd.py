@@ -96,5 +96,14 @@ class KlineInitTestScript(unittest.TestCase):
         self.assertEqual(obd_requests, {"0100"})
 
 
+class BatFileTest(unittest.TestCase):
+    def test_bat_is_ascii_with_crlf(self):
+        # LF 改行や日本語が入ると、cmd.exe がコマンドを読み違える
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "run_kline_test.bat")
+        data = open(path, "rb").read()
+        data.decode("ascii")
+        self.assertEqual(data.count(b"\n"), data.count(b"\r\n"))
+
+
 if __name__ == "__main__":
     unittest.main()
