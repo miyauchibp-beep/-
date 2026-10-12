@@ -27,7 +27,7 @@ try:
     from obd_scanner import pids
     from obd_scanner.ai_diag import AiDiagError, diagnose
     from obd_scanner.console import ask_port, remember_port, run_from_console
-    from obd_scanner.elm327 import Elm327, ObdError
+    from obd_scanner.elm327 import KNOWN_SETTINGS, Elm327, ObdError
     from obd_scanner.scan import full_scan, read_live, supported_pids
 except ImportError:
     print("obd_scanner フォルダが見つかりません。obd_scan.py と同じ場所にフォルダごとコピーしてください。")
@@ -36,14 +36,54 @@ except ImportError:
     sys.exit(1)
 
 
-def load_init_settings(path="working_init.json"):
-    """kline_init_test.py が見つけた接続設定。なければ自動判別。"""
+INIT_FILE = "working_init.json"
+
+
+def load_init_settings(path=INIT_FILE):
+    """前回つながった接続設定（kline_init_test.py か obd_scan.py が保存）。なければ None。"""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         return data.get("protocol", "0"), data.get("extra_init", []), data.get("reset", "ATZ")
     except (OSError, ValueError):
-        return "0", [], "ATZ"
+        return None
+
+
+def save_init_settings(protocol, extra, reset, label, path=INIT_FILE):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"protocol": protocol, "extra_init": extra, "reset": reset, "label": label,
+                       "found_at": datetime.now().isoformat(timespec="seconds")},
+                      f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
+def connect_any(elm, saved):
+    """保存済みの設定 → 既知の設定（自動判別・CAN・トヨタ K-line）の順に、繋がるまで試す。
+
+    繋がった設定を返す。全部だめなら ObdError（最後のエラー）。
+    """
+    candidates = []
+    if saved:
+        candidates.append((*saved, "前回つながった設定"))
+    for protocol, extra, label in KNOWN_SETTINGS:
+        if not saved or (protocol, list(extra)) != (saved[0], list(saved[1])):
+            candidates.append((protocol, list(extra), "ATZ", label))
+    last_error = None
+    for i, (protocol, extra, reset, label) in enumerate(candidates):
+        if i and protocol in "345":
+            time.sleep(3)  # K-line は失敗した直後の初期化を受け付けないことがある
+        print(f"  {label} で接続中... ", end="", flush=True)
+        try:
+            elm.connect(protocol=protocol, extra_init=extra, reset=reset)
+        except ObdError as e:
+            print(f"だめでした（{e}）")
+            last_error = e
+            continue
+        print("OK")
+        return elm.protocol or protocol, extra, reset, label
+    raise last_error
 
 
 def print_report(r):
@@ -194,25 +234,32 @@ def main(argv=None):
     if args.demo:
         from obd_scanner.simulator import FakeElm327
         port = FakeElm327(vehicle_protocol="6", needs_kw0=False)
-        protocol, extra, reset = "0", [], "ATZ"
+        saved = None
     else:
         port = ask_port(args.port)
         if port is None:
             return 2
-        protocol, extra, reset = load_init_settings()
+        saved = load_init_settings()
 
     try:
         elm = Elm327(port, baudrate=args.baudrate)
-        print("車両に接続しています...")
-        elm.connect(protocol=protocol, extra_init=extra, reset=reset)
     except ObdError as e:
         print(f"接続できません: {e}")
-        print("・スマホの Bluetooth をオフ / Car Scanner を閉じましたか？")
-        print("・キーは ON ですか？ 古い車は kline_init_test.py（run_kline_test.bat）で設定を探してください")
         return 1
-    print(f"接続しました: {elm.protocol_name}")
     if not args.demo:
         remember_port(port)
+    print("車両に接続しています...")
+    try:
+        protocol, extra, reset, label = connect_any(elm, saved)
+    except ObdError as e:
+        print(f"\n接続できません: {e}")
+        print("・キーは ON ですか？")
+        print("・それでもだめなら run_kline_test.bat でほかの設定を探してください")
+        elm.close()
+        return 1
+    print(f"接続しました: {elm.protocol_name}")
+    if not args.demo and label != "前回つながった設定":
+        save_init_settings(protocol, extra, reset, label)
 
     try:
         if args.live:

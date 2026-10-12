@@ -271,6 +271,57 @@ class AiDiagTest(unittest.TestCase):
         self.assertIn("ANTHROPIC_API_KEY", str(cm.exception))
 
 
+class ConnectAnyTest(unittest.TestCase):
+    def _toyota(self):
+        return FakeElm327(vehicle_protocol="4", needs_kw0=False, init_address="13", init_baud="96")
+
+    def test_finds_toyota_kline_without_saved_settings(self):
+        # 2026-10-12、アレックスで run_scan.bat を先に押して UNABLE TO CONNECT になった
+        import contextlib
+        import io
+        from unittest import mock
+        import obd_scan
+        elm = Elm327(self._toyota())
+        with mock.patch("time.sleep"), contextlib.redirect_stdout(io.StringIO()) as out:
+            protocol, extra, reset, label = obd_scan.connect_any(elm, None)
+        self.assertEqual((protocol, extra, label), ("4", ["ATSH8113F1", "ATIB96", "ATIIA13"],
+                                                    "トヨタ K-line（宛先 13・9600bps）"))
+        self.assertIn("自動判別 で接続中... だめでした", out.getvalue())
+
+    def test_saved_setting_is_tried_first(self):
+        import contextlib
+        import io
+        import obd_scan
+        fake = self._toyota()
+        elm = Elm327(fake)
+        saved = ("4", ["ATSH8113F1", "ATIB96", "ATIIA13"], "ATZ")
+        with contextlib.redirect_stdout(io.StringIO()):
+            got = obd_scan.connect_any(elm, saved)
+        self.assertEqual(got[3], "前回つながった設定")
+        self.assertNotIn("ATSP0", fake.sent)
+
+    def test_stale_saved_setting_falls_back(self):
+        # bB で保存した CAN の設定が残ったままアレックスにつないでも、トヨタ K-line に切り替わる
+        import contextlib
+        import io
+        from unittest import mock
+        import obd_scan
+        elm = Elm327(self._toyota())
+        with mock.patch("time.sleep"), contextlib.redirect_stdout(io.StringIO()):
+            got = obd_scan.connect_any(elm, ("6", [], "ATZ"))
+        self.assertEqual(got[0], "4")
+
+    def test_all_fail_raises(self):
+        import contextlib
+        import io
+        from unittest import mock
+        import obd_scan
+        elm = Elm327(FakeElm327(vehicle_protocol="4", init_address="99"))
+        with mock.patch("time.sleep"), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(ObdError):
+                obd_scan.connect_any(elm, None)
+
+
 class FromScanTest(unittest.TestCase):
     def test_latest_scan_is_used(self):
         import obd_scan

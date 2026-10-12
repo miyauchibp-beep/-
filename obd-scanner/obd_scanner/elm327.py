@@ -20,6 +20,17 @@ PROTOCOLS = {
 }
 CAN_PROTOCOLS = {"6", "7", "8", "9"}
 
+# トヨタの古い K-line 車（アレックス NZE121 など）: 宛先 13・9600bps・ヘッダ 81 13 F1。
+# Car Scanner の「Toyota OBD-II / EOBD」プロファイルが実際に送っている組み合わせ（2026-10-02 のログで確認）
+TOYOTA_KWP = ["ATSH8113F1", "ATIB96", "ATIIA13"]
+
+# 保存済みの設定がないとき・繋がらないときに、順に試す接続設定 (プロトコル, 追加コマンド, 説明)
+KNOWN_SETTINGS = [
+    ("0", [], "自動判別"),
+    ("6", [], "CAN 11bit 500k"),
+    ("4", TOYOTA_KWP, "トヨタ K-line（宛先 13・9600bps）"),
+]
+
 NO_DATA_MARKERS = ("NO DATA", "?")
 ERROR_MARKERS = (
     "UNABLE TO CONNECT",
