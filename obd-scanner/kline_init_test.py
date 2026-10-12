@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 
 try:
-    from obd_scanner.elm327 import Elm327, ObdError, parse_response
+    from obd_scanner.elm327 import PROTOCOLS, Elm327, ObdError, parse_response
     from obd_scanner.pids import decode_monitor_status, supported_from_bitmap
 except ImportError:
     # ダブルクリック起動だと、ここで落ちると画面が一瞬で閉じてしまうので待つ
@@ -228,7 +228,9 @@ def main(argv=None):
             for line in details:
                 print(f"       {line}")
             log.write("  => 成功: " + " / ".join(details))
-            found.append({"no": no, "protocol": protocol, "extra_init": extra, "label": label,
+            # 自動判別（0）のときは、実際に見つかったプロトコル番号を残す
+            detected = elm.protocol if protocol == "0" and elm.protocol else protocol
+            found.append({"no": no, "protocol": detected, "extra_init": extra, "label": label,
                           "generic_obd": True})
             if not args.all:
                 break
@@ -269,7 +271,8 @@ def main(argv=None):
                 json.dump(result, f, ensure_ascii=False, indent=2)
             print("繋がった設定を working_init.json に保存しました。")
         cmds = " ".join(best["extra_init"]) or "(追加なし)"
-        print(f"→ プロトコル {best['protocol']} / 追加コマンド: {cmds}")
+        name = PROTOCOLS.get(best["protocol"], "")
+        print(f"→ プロトコル {best['protocol']} {name} / 追加コマンド: {cmds}")
     else:
         print("どの設定でも繋がりませんでした。")
         print("次の手:")

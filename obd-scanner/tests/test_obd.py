@@ -78,6 +78,17 @@ class KlineInitTestScript(unittest.TestCase):
         os.chdir(self.cwd)
         self.tmp.cleanup()
 
+    def test_auto_detect_records_detected_protocol(self):
+        # 2026-10-12 の bB（CAN）: 自動判別で成功したら、0 ではなく見つかった番号を保存する
+        import contextlib
+        import io
+        from unittest import mock
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        out = io.StringIO()
+        with mock.patch("obd_scanner.simulator.FakeElm327", return_value=fake), contextlib.redirect_stdout(out):
+            self.assertEqual(kline_init_test.main(["--demo", "--round", "1", "--only", "10"]), 0)
+        self.assertIn("→ プロトコル 6 ISO 15765-4 CAN", out.getvalue())
+
     def test_refuses_snapon_ports(self):
         self.assertEqual(kline_init_test.main(["COM4"]), 2)
         self.assertEqual(kline_init_test.main(["com5"]), 2)
