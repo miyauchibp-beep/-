@@ -41,9 +41,9 @@ def load_init_settings(path="working_init.json"):
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        return data.get("protocol", "0"), data.get("extra_init", [])
+        return data.get("protocol", "0"), data.get("extra_init", []), data.get("reset", "ATZ")
     except (OSError, ValueError):
-        return "0", []
+        return "0", [], "ATZ"
 
 
 def print_report(r):
@@ -192,17 +192,17 @@ def main(argv=None):
     if args.demo:
         from obd_scanner.simulator import FakeElm327
         port = FakeElm327(vehicle_protocol="6", needs_kw0=False)
-        protocol, extra = "0", []
+        protocol, extra, reset = "0", [], "ATZ"
     else:
         port = ask_port(args.port)
         if port is None:
             return 2
-        protocol, extra = load_init_settings()
+        protocol, extra, reset = load_init_settings()
 
     try:
         elm = Elm327(port, baudrate=args.baudrate)
         print("車両に接続しています...")
-        elm.connect(protocol=protocol, extra_init=extra)
+        elm.connect(protocol=protocol, extra_init=extra, reset=reset)
     except ObdError as e:
         print(f"接続できません: {e}")
         print("・スマホの Bluetooth をオフ / Car Scanner を閉じましたか？")

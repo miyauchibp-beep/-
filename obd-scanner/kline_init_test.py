@@ -71,7 +71,18 @@ ROUND3 = [
     ("9", [], "CAN 29bit 250k"),
 ]
 
-ROUNDS = {1: ROUND1, 2: ROUND2, 3: ROUND3}
+# 4 回目: アレックス（KWP 5baud・宛先 33・共通規格に応答、Car Scanner では接続できる）向けに、
+# アダプタのリセット方法や初期化の指示の仕方を変える。4 番目の要素はリセットに使うコマンド
+ROUND4 = [
+    ("4", [], "リセットを ATD（設定の初期化だけ）にする", "ATD"),
+    ("4", ["ATKW0"], "ATD + キーワード検査オフ", "ATD"),
+    ("4", [], "リセットを ATWS（軽い再起動）にする", "ATWS"),
+    ("4", ["ATSI"], "5baud 初期化を ATSI で明示", "ATZ"),
+    ("4", ["ATKW0", "ATSI"], "キーワード検査オフ + ATSI", "ATD"),
+    ("0", [], "ATD のあと自動判別", "ATD"),
+]
+
+ROUNDS = {1: ROUND1, 2: ROUND2, 3: ROUND3, 4: ROUND4}
 
 # 初期化に成功したあとに送る読み取り要求（すべて読み取りのみ）
 #   01 00/01 01 … 共通規格の対応PID・警告灯   03 … 故障コード
@@ -103,7 +114,7 @@ def exchange(elm, log, cmd, timeout=None):
     return reply
 
 
-def try_variant(elm, log, protocol, extra, wait):
+def try_variant(elm, log, protocol, extra, wait, reset="ATZ"):
     """1 つの設定で初期化を試す。
 
     返り値: "ok"   … 共通規格（01 00）に答えた
@@ -113,7 +124,7 @@ def try_variant(elm, log, protocol, extra, wait):
     exchange(elm, log, "ATPC", timeout=3)
     if wait:
         time.sleep(wait)  # K-line は前回の初期化失敗から数秒あけないと受け付けないことがある
-    exchange(elm, log, "ATZ", timeout=5)
+    exchange(elm, log, reset, timeout=5)
     for cmd in ("ATE0", "ATL0", "ATS1", "ATH0"):
         exchange(elm, log, cmd, timeout=3)
     exchange(elm, log, f"ATSP{protocol}", timeout=3)
@@ -174,14 +185,18 @@ def main(argv=None):
     ap.add_argument("--all", action="store_true", help="成功しても全部試す")
     ap.add_argument("--only", type=int, nargs="+", help="試す番号だけ指定（例: --only 2 3）")
     ap.add_argument("--round", type=int, choices=sorted(ROUNDS), default=2,
-                    help="試す設定の組（1: 一般的な設定、2: 自動判別・CAN・K-line の宛先、3: CAN だけ。既定 2）")
+                    help="試す設定の組（1: 一般的な設定、2: 自動判別・CAN・K-line の宛先、3: CAN だけ、"
+                         "4: リセット方法・ATSI を変える。既定 2）")
     ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
     args = ap.parse_args(argv)
 
     if args.demo:
         from obd_scanner.simulator import FakeElm327
-        # 1 回目: 宛先 33 でキーワード検査が引っかかる車 / 2 回目: 宛先 10 の国内独自の車
-        fake = FakeElm327() if args.round == 1 else FakeElm327(init_address="10", generic_obd=False)
+        # 2 回目: 宛先 10 の国内独自の車 / 3 回目: CAN の車 / ほか: 宛先 33 でキーワード検査が引っかかる車
+        fake = {
+            2: lambda: FakeElm327(init_address="10", generic_obd=False),
+            3: lambda: FakeElm327(vehicle_protocol="6", needs_kw0=False),
+        }.get(args.round, FakeElm327)()
         port, wait = fake, 0
     else:
         args.port = ask_port(args.port)
@@ -204,7 +219,8 @@ def main(argv=None):
 
     print("アダプタを確認しています...")
     log.write("\n[アダプタ確認]")
-    version = exchange(elm, log, "ATZ", timeout=5).strip(" \r\n>")
+    # 4 回目はリセット方法の違いを見るので、最初の確認でも ATZ を送らない
+    version = exchange(elm, log, "ATI" if args.round == 4 else "ATZ", timeout=5).strip(" \r\n>")
     if "ELM" not in version.upper():
         # 接続直後はゴミが混じって ATZ の応答が崩れることがあるので、もう一度だけ聞く
         time.sleep(1)
@@ -227,10 +243,11 @@ def main(argv=None):
 
     found = []
     print(f"\n{len(variants)} 通りの設定を試します（1つあたり {wait + 5:.0f}〜{wait + 25:.0f} 秒）。キーは ON のままにしてください。\n")
-    for no, (protocol, extra, label) in variants:
+    for no, (protocol, extra, label, *rest) in variants:
         print(f"[{no:>2}] {label} ... ", end="", flush=True)
         log.write(f"\n[{no}] プロトコル{protocol} {' '.join(extra) or '(追加なし)'}  {label}")
-        status = try_variant(elm, log, protocol, extra, wait)
+        reset = rest[0] if rest else "ATZ"
+        status = try_variant(elm, log, protocol, extra, wait, reset=reset)
         if status == "ok":
             print("成功")
             details = summarize_success(elm, log)
@@ -240,7 +257,7 @@ def main(argv=None):
             # 自動判別（0）のときは、実際に見つかったプロトコル番号を残す
             detected = elm.protocol if protocol == "0" and elm.protocol else protocol
             found.append({"no": no, "protocol": detected, "extra_init": extra, "label": label,
-                          "generic_obd": True})
+                          "reset": reset, "generic_obd": True})
             if not args.all:
                 break
         elif status == "init":
@@ -252,7 +269,7 @@ def main(argv=None):
             if not answered:
                 print("       どの読み取り要求にも返事なし")
             found.append({"no": no, "protocol": protocol, "extra_init": extra, "label": label,
-                          "generic_obd": False, "answered": answered})
+                          "reset": reset, "generic_obd": False, "answered": answered})
             if not args.all:
                 break
         else:
@@ -270,6 +287,7 @@ def main(argv=None):
             "port": args.port,
             "protocol": best["protocol"],
             "extra_init": best["extra_init"],
+            "reset": best["reset"],
             "label": best["label"],
             "generic_obd": best["generic_obd"],
             "found_at": datetime.now().isoformat(timespec="seconds"),

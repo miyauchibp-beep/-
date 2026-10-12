@@ -19,6 +19,10 @@ PC からだと `BUS INIT: ...ERROR` になり ECU に繋がりません（ス�
   PC → Bluetooth → アダプタ → ECU の経路は正常で、問題はアレックスの K-line 初期化に限られる
 - 既定の組には、自動判別で CAN を見つけられない互換品向けに CAN 直接指定（ATSP6）も入れている。
   CAN だけを試すなら `--round 3`
+- 2026-10-12 Car Scanner の画面: アレックスは **ISO 14230-4 KWP (5 baud init, 10.4 kbaud)**、較正ID 31205100
+  （モード 09 に応答 = 共通規格に答える ECU）。宛先 33 で正しいはずで、違うのは初期化の始め方か電圧。
+  `--round 4` はリセットを ATD / ATWS にしたり、ATSI で初期化を明示したりする（ATZ を一切送らない）。
+  見つかったリセット方法は working_init.json の reset に保存され、obd_scan.py も同じ方法で接続する
 - 次の手がかり: Car Scanner が実際に送っている設定（接続プロファイル・通信ログ）と、
   新しい CAN の車で PC → アダプタ → ECU の経路が正常か（`--round 1 --only 10`）
 

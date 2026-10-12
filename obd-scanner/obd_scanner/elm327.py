@@ -162,13 +162,14 @@ class Elm327:
             text = text.lstrip()[len(command):]
         return text
 
-    def connect(self, protocol="0", extra_init=()):
+    def connect(self, protocol="0", extra_init=(), reset="ATZ"):
         """アダプタを初期化し、車両と通信できる状態にする。
 
         extra_init には、ATSP の後に送る追加の AT コマンド（例: ["ATKW0"]）を渡す。
         kline_init_test.py で見つかった設定をそのまま使える。
+        reset はアダプタのリセットに使うコマンド（ATZ / ATD / ATWS）。
         """
-        self.send_raw("ATZ", timeout=5)
+        self.send_raw(reset, timeout=5)
         if self._is_serial:
             time.sleep(0.5)
         for cmd in ("ATE0", "ATL0", "ATS1", "ATH0", "ATAT1"):

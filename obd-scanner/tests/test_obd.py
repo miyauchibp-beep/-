@@ -302,6 +302,34 @@ class KlineInitTestScript(unittest.TestCase):
     def test_round3_only_uses_can(self):
         self.assertTrue(all(p in "6789" for p, _, _ in kline_init_test.ROUND3))
 
+    def test_round4_uses_other_resets(self):
+        fake = FakeElm327()
+        elm = Elm327(fake)
+        log = kline_init_test.Logger(os.path.join(self.tmp.name, "log.txt"))
+        protocol, extra, _, reset = kline_init_test.ROUND4[0]
+        kline_init_test.try_variant(elm, log, protocol, extra, wait=0, reset=reset)
+        log.close()
+        self.assertIn("ATD", fake.sent)
+        self.assertNotIn("ATZ", fake.sent)
+
+    def test_scan_uses_saved_reset(self):
+        import obd_scan
+        with open("working_init.json", "w", encoding="utf-8") as f:
+            json.dump({"protocol": "4", "extra_init": ["ATKW0"], "reset": "ATD"}, f)
+        self.assertEqual(obd_scan.load_init_settings(), ("4", ["ATKW0"], "ATD"))
+        fake = FakeElm327()
+        elm = Elm327(fake)
+        elm.connect(protocol="4", extra_init=["ATKW0"], reset="ATD")
+        self.assertEqual(fake.sent[0], "ATD")
+        self.assertNotIn("ATZ", fake.sent)
+
+    def test_round4_runs_from_main_without_atz(self):
+        from unittest import mock
+        fake = FakeElm327()
+        with mock.patch("obd_scanner.simulator.FakeElm327", return_value=fake):
+            self.assertEqual(kline_init_test.main(["--demo", "--round", "4"]), 0)
+        self.assertNotIn("ATZ", fake.sent)
+
     def test_refuses_snapon_ports(self):
         self.assertEqual(kline_init_test.main(["COM4"]), 2)
         self.assertEqual(kline_init_test.main(["com5"]), 2)
@@ -313,7 +341,7 @@ class KlineInitTestScript(unittest.TestCase):
         elm = Elm327(fake)
         log = kline_init_test.Logger(os.path.join(self.tmp.name, "log.txt"))
         results = [(extra, kline_init_test.try_variant(elm, log, p, extra, wait=0))
-                   for p, extra, _ in kline_init_test.ROUNDS[round_no]]
+                   for p, extra, *_ in kline_init_test.ROUNDS[round_no]]
         return elm, log, results
 
     def test_round2_finds_non_standard_init_address(self):
@@ -336,8 +364,8 @@ class KlineInitTestScript(unittest.TestCase):
         elm = Elm327(fake)
         log = kline_init_test.Logger(os.path.join(self.tmp.name, "log.txt"))
         for variants in kline_init_test.ROUNDS.values():
-            for protocol, extra, _ in variants:
-                kline_init_test.try_variant(elm, log, protocol, extra, wait=0)
+            for protocol, extra, _, *rest in variants:
+                kline_init_test.try_variant(elm, log, protocol, extra, wait=0, reset=rest[0] if rest else "ATZ")
         kline_init_test.run_probes(elm, log)
         log.close()
         obd_requests = {c for c in fake.sent if not c.startswith("AT")}
