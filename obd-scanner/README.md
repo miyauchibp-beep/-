@@ -16,7 +16,8 @@ PC からだと `BUS INIT: ...ERROR` になり ECU に繋がりません（ス�
 1. このフォルダ（`kline_init_test.py` と `obd_scanner` フォルダ）を `C:\Users\Owner\Downloads\OBD` に置く
 2. スマホの Bluetooth をオフにし、Car Scanner を閉じる
 3. 車のキーを ON（エンジンは OFF、電圧が低ければ安定化電源をつなぐ）
-4. コマンドプロンプトで:
+4. `run_kline_test.bat` をダブルクリック（COM6 で実行し、終わっても画面は閉じません）。
+   または、コマンドプロンプトで:
 
    ```
    cd C:\Users\Owner\Downloads\OBD

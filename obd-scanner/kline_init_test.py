@@ -118,7 +118,8 @@ def main(argv=None):
         from obd_scanner.simulator import FakeElm327
         port, wait = FakeElm327(), 0
     elif not args.port:
-        ap.error("COM ポートを指定してください（例: python kline_init_test.py COM6）")
+        # ダブルクリックで起動したときはポートを聞く
+        args.port = input("アダプタの COM ポートを入力して Enter（何も入れなければ COM6）: ").strip() or "COM6"
     else:
         if args.port.upper() in FORBIDDEN_PORTS:
             print(f"{args.port} はスナップオン診断機（NANO-BT2）のポートなので使いません。")
@@ -208,5 +209,21 @@ def main(argv=None):
     return 0 if found else 1
 
 
+def run_from_console():
+    """エラーでも画面がすぐ閉じないよう、最後に Enter を待つ。"""
+    code = 1
+    try:
+        code = main()
+    except KeyboardInterrupt:
+        print("\n中断しました。")
+    except Exception:
+        import traceback
+        print("\n予期しないエラーが出ました。この画面の文字をすべてコピーして Claude に送ってください。\n")
+        traceback.print_exc()
+    if os.name == "nt":
+        input("\nEnter キーを押すと閉じます...")
+    return code
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_from_console())
