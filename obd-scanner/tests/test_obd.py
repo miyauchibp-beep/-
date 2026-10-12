@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -188,6 +189,36 @@ class AiDiagTest(unittest.TestCase):
         self.assertIn("ANTHROPIC_API_KEY", str(cm.exception))
 
 
+class FromScanTest(unittest.TestCase):
+    def test_latest_scan_is_used(self):
+        import obd_scan
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("scan_logs")
+                for name, proto in (("scan_20261012_100000.json", "old"), ("scan_20261012_120000.json", "new")):
+                    with open(os.path.join("scan_logs", name), "w", encoding="utf-8") as f:
+                        json.dump({"protocol": proto, "note": "x"}, f)
+                seen = []
+                with mock.patch.object(obd_scan, "diagnose", lambda r, v, s, on_text: seen.append(r) or "ok"):
+                    self.assertEqual(obd_scan.main(["--from-scan"]), 0)
+                self.assertEqual(seen[0]["protocol"], "new")
+            finally:
+                os.chdir(cwd)
+
+    def test_no_scans_yet(self):
+        import obd_scan
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                self.assertEqual(obd_scan.main(["--from-scan"]), 1)
+            finally:
+                os.chdir(cwd)
+
+
 class KlineInitTestScript(unittest.TestCase):
     def setUp(self):
         self.cwd = os.getcwd()
@@ -269,7 +300,7 @@ class BatFileTest(unittest.TestCase):
     def test_bat_is_ascii_with_crlf(self):
         # LF 改行や日本語が入ると、cmd.exe がコマンドを読み違える
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        for name in ("run_kline_test.bat", "run_scan.bat"):
+        for name in ("run_kline_test.bat", "run_scan.bat", "run_diag_last.bat"):
             with open(os.path.join(root, name), "rb") as f:
                 data = f.read()
             data.decode("ascii")

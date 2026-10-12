@@ -7,6 +7,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FILES = [
     "obd_scan.py",
     "run_scan.bat",
+    "run_diag_last.bat",
     "kline_init_test.py",
     "run_kline_test.bat",
     "obd_scanner/__init__.py",
@@ -32,7 +33,8 @@ README = """OBD スキャンツール
   Claude の診断には API キーが必要です。未設定なら、コマンドプロンプトで一度だけ
     setx ANTHROPIC_API_KEY "sk-ant-で始まるキー"
   を実行し、画面を開き直してください。
-  保存済みの結果で診断し直す: python obd_scan.py --from-scan scan_logs\\scan_日時.json
+
+■ run_diag_last.bat … 車をつながずに、いちばん新しい読み取り結果を Claude に診断させる
   ライブデータを見続けたいときは、このフォルダのアドレス欄に cmd と入れて Enter し、
     python obd_scan.py COM6 --live
   （CSV にも記録するなら --live --csv。Ctrl+C で終了）
@@ -40,7 +42,7 @@ README = """OBD スキャンツール
 ■ run_kline_test.bat … 繋がらない車で、接続設定を探す
   繋がった設定は working_init.json に保存され、run_scan.bat が自動で使います。
 
-どちらも最後に「Enter キーを押すと閉じます」と出たら、
+いずれも最後に「Enter キーを押すと閉じます」と出たら、
 画面の文字を全部コピーして Claude に貼ってください。
 
 車に送るのは読み取りだけです。故障コードの消去などはしません。

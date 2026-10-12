@@ -5,6 +5,7 @@ r"""車の故障コード・フリーズフレーム・ライブデータを読�
     python obd_scan.py COM6 --no-ai    # 読み取りと保存だけ
     python obd_scan.py COM6 --live     # ライブデータを表示し続ける（Ctrl+C で終了）
     python obd_scan.py --from-scan scan_logs\scan_20261012_121847.json   # 保存済みの結果で診断し直す
+    python obd_scan.py --from-scan     # ファイル名を省くと、いちばん新しい読み取り結果を使う
     python obd_scan.py --demo          # アダプタなしで動作確認
 
 Claude の診断には、環境変数 ANTHROPIC_API_KEY に API キーを設定しておく必要があります。
@@ -15,6 +16,7 @@ kline_init_test.py が作った working_init.json があれば、その接続設
 
 import argparse
 import csv
+import glob
 import json
 import os
 import sys
@@ -152,13 +154,21 @@ def main(argv=None):
     ap.add_argument("--csv", action="store_true", help="--live のとき CSV にも記録する")
     ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
     ap.add_argument("--no-ai", action="store_true", help="Claude による診断をしない")
-    ap.add_argument("--from-scan", metavar="JSON", help="保存済みのスキャン結果で Claude に診断させる（車に繋がない）")
+    ap.add_argument("--from-scan", metavar="JSON", nargs="?", const="latest",
+                    help="保存済みのスキャン結果で Claude に診断させる（車に繋がない）。省略時は最新のもの")
     args = ap.parse_args(argv)
 
     os.makedirs("scan_logs", exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if args.from_scan:
+        if args.from_scan == "latest":
+            scans = sorted(glob.glob(os.path.join("scan_logs", "scan_*.json")))
+            if not scans:
+                print("scan_logs フォルダに読み取り結果がありません。先に run_scan.bat で車を読み取ってください。")
+                return 1
+            args.from_scan = scans[-1]
+            print(f"読み取り結果: {args.from_scan}")
         with open(args.from_scan, encoding="utf-8") as f:
             report = json.load(f)
         report.pop("ai_diagnosis", None)
