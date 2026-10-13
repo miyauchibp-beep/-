@@ -18,6 +18,10 @@ FILES = [
     "obd_scanner/scan.py",
     "obd_scanner/console.py",
     "obd_scanner/ai_diag.py",
+    # PC の Claude Code で作業を続けるための経緯・構想メモ
+    "HANDOFF.md",
+    "ROADMAP.md",
+    "README.md",
 ]
 
 README = """OBD スキャンツール
