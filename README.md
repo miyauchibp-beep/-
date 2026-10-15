@@ -50,3 +50,9 @@ Bill One・楽楽明細・BtoB プラットフォームなどはログインし�
 
 - 今すぐ取り込む: `processInvoices` を実行
 - 今すぐレポートを送る: `sendMonthlyReport` を実行
+
+---
+
+## その他のスクリプト
+
+- [問い合わせフォーム 項目追加スクリプト](forms/README.md)（`forms/`）… 問い合わせ Google フォームに予算・希望作業などの質問を追加
