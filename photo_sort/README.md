@@ -10,13 +10,20 @@
 
 ## 準備（初回だけ）
 
-1. Python をインストール：<https://www.python.org/downloads/>
+1. （Windows のみ）Python をインストール：<https://www.python.org/downloads/>
    （インストール画面で「Add python.exe to PATH」にチェック）
 2. この `photo_sort` フォルダを PC にダウンロード
 
 ## 使い方
 
-整備写真のフォルダを **`写真仕分け.bat` の上にドラッグ＆ドロップ** するだけです。
+- **Windows**：整備写真のフォルダを **`写真仕分け.bat` の上にドラッグ＆ドロップ** するだけです。
+- **Linux**（Ubuntu など）：Python は最初から入っています。端末で次を実行します。
+
+  ```
+  cd ~/ダウンロード/photo_sort
+  ./写真仕分け.sh ~/ピクチャ/整備写真
+  ```
+  初回だけ必要な部品（`python3-pil` `python3-numpy`）を自動で入れます。
 
 結果は写真フォルダの隣に作られる `写真仕分け結果` フォルダに入ります。
 
