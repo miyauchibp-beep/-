@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-「未使用」の写真を、1 回の作業(= 同じフォルダ・同じ撮影日)ごとにまとめ、
+「未使用」の写真を元のフォルダ(車両ごとのフォルダ)ごとにまとめ、
 枚数が多いものは「ブログ向け」、少ないものは「SNS向け」(インスタ・X・LINE)に分けます。
 
 使い方:
@@ -58,23 +58,25 @@ def main():
     if out.startswith(src + os.sep):
         sys.exit("仕分け先は未使用フォルダの外にしてください")
 
-    groups = defaultdict(list)  # (フォルダ, 撮影日) -> [(時刻, パス)]
+    # 元のフォルダごとにまとめる。フォルダに入っていない写真だけは撮影日ごと
+    groups = defaultdict(list)  # まとまり名 -> [(時刻, パス)]
     for root, _, names in os.walk(src):
+        rel = os.path.relpath(root, src)
         for n in names:
             if os.path.splitext(n)[1].lower() in IMAGE_EXT:
                 p = os.path.join(root, n)
                 t = shot_time(p)
-                groups[(os.path.relpath(root, src), t.date())].append((t, p))
+                groups[rel if rel != "." else f"フォルダなし_{t:%Y-%m-%d}"].append((t, p))
 
     rows, blog, sns = [], 0, 0
-    for (folder, day), items in sorted(groups.items()):
+    for label, items in sorted(groups.items()):
         kind = "ブログ向け" if len(items) >= args.min else "SNS向け"
-        label = day.strftime("%Y-%m-%d") if folder == "." else f"{day:%Y-%m-%d}_{folder.replace(os.sep, '_')}"
         dst_dir = os.path.join(out, kind, label)
         os.makedirs(dst_dir, exist_ok=True)
         for t, p in sorted(items):
             (shutil.move if args.move else shutil.copy2)(p, os.path.join(dst_dir, os.path.basename(p)))
-        rows.append([kind, label, len(items), f"{items[0][0]:%H:%M}" if items else ""])
+        times = sorted(t for t, _ in items)
+        rows.append([kind, label, len(items), f"{times[0]:%Y-%m-%d}", f"{times[-1]:%Y-%m-%d}"])
         if kind == "ブログ向け":
             blog += 1
         else:
@@ -84,7 +86,7 @@ def main():
     report = os.path.join(out, "用途別一覧.csv")
     with open(report, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
-        w.writerow(["用途", "まとまり(撮影日_フォルダ)", "枚数", "最初の撮影時刻"])
+        w.writerow(["用途", "フォルダ", "枚数", "最初の撮影日", "最後の撮影日"])
         w.writerows(rows)
 
     print("完了しました")
