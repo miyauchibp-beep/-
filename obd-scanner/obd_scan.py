@@ -29,8 +29,8 @@ try:
     from obd_scanner.ai_diag import AiDiagError, diagnose
     from obd_scanner.console import ask_port, remember_port, run_from_console
     from obd_scanner.elm327 import KNOWN_SETTINGS, Elm327, ObdError
-    from obd_scanner.scan import (full_scan, measure_running, read_coolant, read_live, read_rpm,
-                                  supported_pids, warmup_sample)
+    from obd_scanner.scan import (full_scan, hold_rpm_guided, measure_running, read_coolant, read_live,
+                                  read_rpm, supported_pids, warmup_sample)
 except ImportError:
     print("obd_scanner フォルダが見つかりません。obd_scan.py と同じ場所にフォルダごとコピーしてください。")
     if os.name == "nt":
@@ -245,6 +245,28 @@ def run_ai(report, stamp, report_path=None):
 
 
 
+# 2,500rpm 保持の音の案内（運転席から PC を見なくてよいように）
+_BEEPS = {
+    "low": [(500, 180), (500, 180)],      # 低い「プッ、プッ」= もっと踏む
+    "high": [(1600, 120), (1600, 120)],   # 高い「ピッ、ピッ」= 踏みすぎ
+    "ok": [(1000, 120), (1000, 120)],     # 「ピピッ」= ちょうどいい
+    "start": [(1200, 300)],               # 記録開始
+    "done": [(900, 900)],                 # 長い「ピー」= 終わり。アクセルを戻す
+}
+_BEEP_TEXT = {"low": "↑ もっと踏む", "high": "↓ 踏みすぎ", "ok": "◎ ちょうどいい（そのまま 3 秒）",
+              "start": "● 記録中…そのまま保って", "done": "■ 終わり。アクセルを戻してください"}
+
+
+def beep(kind):
+    print(f"   {_BEEP_TEXT[kind]}", flush=True)
+    try:
+        import winsound
+        for freq, ms in _BEEPS[kind]:
+            winsound.Beep(freq, ms)
+    except (ImportError, RuntimeError):
+        print("\a", end="", flush=True)  # Windows 以外は端末のベル
+
+
 def ask_yes(prompt):
     """[Enter = はい / n = いいえ]。対話できないとき（テスト・リダイレクト）は「いいえ」。"""
     if not sys.stdin or not sys.stdin.isatty():
@@ -296,6 +318,10 @@ def print_stage(title, st):
         print("   保留中の故障コード: " + "、".join(c["code"] for c in st["pending_dtcs"]))
 
 
+def demo_beep(kind):
+    print(f"   {_BEEP_TEXT[kind]}")
+
+
 def run_stages(elm, report, reconnect, demo_fake=None):
     """キー ON の読み取りのあと、エンジン始動 → アイドリング →（暖機）→（2,500rpm 保持）を続けて測る。"""
     supported = {int(p, 16) for p in report.get("supported_pids", [])}
@@ -341,12 +367,22 @@ def run_stages(elm, report, reconnect, demo_fake=None):
         stages["idle_warm"] = with_retry(elm, reconnect, measure_running, elm, supported, 20)
         print_stage("暖機後のアイドリング", stages["idle_warm"])
 
-    if ask_yes("\n2,500rpm 付近で保持して測りますか？（触媒・リア O2 の確認用） [Enter = はい / n = いいえ]: "):
-        input("アクセルで 2,500rpm 前後に保ち、安定したら Enter を押してください: ")
-        print("測っています（20 秒ほど）。そのまま保ってください...")
-        stages["hold_2500rpm"] = with_retry(elm, reconnect, measure_running, elm, supported, 15)
-        print("アクセルを戻してください。")
-        print_stage("2,500rpm 保持", stages["hold_2500rpm"])
+    if ask_yes("\n2,500rpm で保持して測りますか？（触媒・リア O2 の確認用） [Enter = はい / n = いいえ]: "):
+        print("\n運転席に移って、アクセルで回転を上げてください（2 分以内）。PC を見なくても音で案内します。")
+        print("   低い「プッ、プッ」= もっと踏む ／ 高い「ピッ、ピッ」= 踏みすぎ")
+        print("   「ピピッ」= ちょうどいい（2,200〜2,800rpm）→ 3 秒保つと自動で記録開始（15 秒）")
+        print("   長い「ピー」= 終わり。アクセルを戻してください")
+        if demo_fake:
+            demo_fake.rpm = 2500
+        hold = with_retry(elm, reconnect, hold_rpm_guided, elm, supported, demo_beep if demo_fake else beep,
+                          poll=0.3 * pause, settle=3.0 * pause)
+        if demo_fake:
+            demo_fake.rpm = 800
+        if hold is None:
+            print("2 分たっても回転が範囲に入らなかったので、2,500rpm の測定はとばします。")
+        else:
+            stages["hold_2500rpm"] = hold
+            print_stage(f"2,500rpm 保持（範囲内だった割合 {int((hold['in_range_ratio'] or 0) * 100)}%）", hold)
     return stages
 
 

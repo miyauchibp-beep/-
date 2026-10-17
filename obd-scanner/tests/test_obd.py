@@ -420,6 +420,30 @@ class StagedScanTest(unittest.TestCase):
         self.assertEqual(list(stages), ["idle_after_start", "warmup_log", "idle_warm", "hold_2500rpm"])
         self.assertGreaterEqual(stages["warmup_log"][-1]["05"], 80)
 
+    def test_guided_hold_beeps(self):
+        # 回転計のない車でも、音だけで 2,500rpm に合わせられる
+        from unittest import mock
+        from obd_scanner import scan
+        fake, elm, report = self._setup()
+        fake.engine_running = True
+        supported = {int(p, 16) for p in report["supported_pids"]}
+        fake.rpm = 2500
+        for seq, first in (([1500, 1500, 2500], "low"), ([3200, 2500], "high")):
+            rpms = iter(seq)
+            heard = []
+            with mock.patch.object(scan, "read_rpm", lambda e: next(rpms, 2500)), mock.patch("time.sleep"):
+                hold = scan.hold_rpm_guided(elm, supported, heard.append, settle=0, duration=0.05)
+            self.assertEqual(heard, [first, "ok", "start", "done"])
+            self.assertEqual(hold["in_range_ratio"], 1.0)
+
+    def test_guided_hold_times_out(self):
+        from unittest import mock
+        from obd_scanner import scan
+        fake, elm, report = self._setup()
+        fake.engine_running = True  # 800rpm のまま
+        with mock.patch("time.sleep"):
+            self.assertIsNone(scan.hold_rpm_guided(elm, set(), lambda k: None, timeout=0.05))
+
     def test_noninteractive_ask_is_no(self):
         import obd_scan
         from unittest import mock

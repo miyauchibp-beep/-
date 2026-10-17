@@ -127,7 +127,7 @@ TREND_PIDS = [0x14, 0x15, 0x06, 0x0C]
 O2_RICH_LEAN_THRESHOLD = 0.45  # V。これをまたいだら「反転」と数える
 
 
-def sample_trend(elm, supported, seconds=10.0, max_samples=200):
+def sample_trend(elm, supported, seconds=10.0, max_samples=200, on_round=None):
     """数秒間くり返し読み、項目ごとの最小・最大・平均と、フロント O2 の反転回数をまとめる。
 
     1 回の値では O2 センサが反転しているか判断できないため。
@@ -145,9 +145,12 @@ def sample_trend(elm, supported, seconds=10.0, max_samples=200):
     start = time.monotonic()
     rounds = 0
     while time.monotonic() - start < seconds and rounds < max_samples:
-        for v in read_live(elm, order):
+        values = read_live(elm, order)
+        for v in values:
             series[int(v["pid"], 16)].append(v["value"])
         rounds += 1
+        if on_round:
+            on_round(values)
     elapsed = time.monotonic() - start
     items = []
     for pid, values in series.items():
@@ -256,3 +259,56 @@ def warmup_sample(elm, supported):
     for v in read_live(elm, [p for p in WARMUP_PIDS if p in supported]):
         row[v["pid"]] = v["value"]
     return row
+
+
+def hold_rpm_guided(elm, supported, beep, target=2500, band=300, settle=3.0, duration=15.0,
+                    timeout=120.0, poll=0.3):
+    """回転数を目標付近に保ってもらい、保てたら自動で測る（PC を見なくてよいよう、音で案内する）。
+
+    beep(kind) の kind: "low"（もっと踏む）, "high"（踏みすぎ）, "ok"（範囲内）, "start"（記録開始）, "done"（終了）
+    目標に入らないまま timeout 秒たったら None。
+    """
+    low, high = target - band, target + band
+    start = time.monotonic()
+    in_range_since = None
+    last_beep = 0.0
+    while True:
+        if time.monotonic() - start > timeout:
+            return None
+        rpm = read_rpm(elm)
+        now = time.monotonic()
+        if rpm is not None and low <= rpm <= high:
+            if in_range_since is None:
+                in_range_since = now
+                beep("ok")
+            if now - in_range_since >= settle:
+                break
+        else:
+            in_range_since = None
+            if rpm is not None and rpm > 0 and now - last_beep >= 1.0:
+                beep("low" if rpm < low else "high")
+                last_beep = now
+        time.sleep(poll)
+
+    beep("start")
+    rpms = []
+
+    def guide(values):
+        for v in values:
+            if v["pid"] == "0C":
+                rpms.append(v["value"])
+                if not low <= v["value"] <= high:
+                    beep("low" if v["value"] < low else "high")
+
+    trend = sample_trend(elm, supported, duration, on_round=guide)
+    beep("done")
+    in_range = sum(1 for r in rpms if low <= r <= high)
+    return {
+        "measured_at": datetime.now().isoformat(timespec="seconds"),
+        "target_rpm": target,
+        "rpm_band": [low, high],
+        "in_range_ratio": round(in_range / len(rpms), 2) if rpms else None,
+        "live": [],
+        "trend": trend,
+        "pending_dtcs": read_pending(elm),
+    }

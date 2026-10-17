@@ -20,6 +20,7 @@ class FakeElm327:
         self.generic_obd = generic_obd
         self.dtcs = list(dtcs)
         self.engine_running = True
+        self.rpm = 800           # エンジン稼働中の回転数
         self.coolant = 83        # 冷却水温（℃）
         self.coolant_step = 0    # 0105 を読むたびに上がる量（暖機のまね）
         self._tick = 0  # O2 センサなどを時間で変化させるためのカウンタ
@@ -120,7 +121,7 @@ class FakeElm327:
         table = {
             "0100": "41 00 BE 3E B8 11",
             "0101": f"41 01 {(0x80 if self.dtcs else 0) | len(self.dtcs):02X} 07 65 00",
-            "010C": "41 0C 0C 80" if self.engine_running else "41 0C 00 00",
+            "010C": f"41 0C {self.rpm * 4 >> 8:02X} {self.rpm * 4 & 0xFF:02X}" if self.engine_running else "41 0C 00 00",
             "010D": "41 0D 00",
             "0105": f"41 05 {self.coolant + 40:02X}",
             "0104": "41 04 40",
