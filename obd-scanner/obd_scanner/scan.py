@@ -262,10 +262,11 @@ def warmup_sample(elm, supported):
 
 
 def hold_rpm_guided(elm, supported, beep, target=2500, band=300, settle=3.0, duration=15.0,
-                    timeout=120.0, poll=0.3):
+                    timeout=120.0, poll=0.3, on_rpm=None):
     """回転数を目標付近に保ってもらい、保てたら自動で測る（PC を見なくてよいよう、音で案内する）。
 
     beep(kind) の kind: "low"（もっと踏む）, "high"（踏みすぎ）, "ok"（範囲内）, "start"（記録開始）, "done"（終了）
+    on_rpm(rpm, low, high) を渡すと、読むたびに呼ぶ（回転ゲージの表示用）。
     目標に入らないまま timeout 秒たったら None。
     """
     low, high = target - band, target + band
@@ -277,6 +278,8 @@ def hold_rpm_guided(elm, supported, beep, target=2500, band=300, settle=3.0, dur
             return None
         rpm = read_rpm(elm)
         now = time.monotonic()
+        if on_rpm and rpm is not None:
+            on_rpm(rpm, low, high)
         if rpm is not None and low <= rpm <= high:
             if in_range_since is None:
                 in_range_since = now
@@ -297,6 +300,8 @@ def hold_rpm_guided(elm, supported, beep, target=2500, band=300, settle=3.0, dur
         for v in values:
             if v["pid"] == "0C":
                 rpms.append(v["value"])
+                if on_rpm:
+                    on_rpm(v["value"], low, high)
                 if not low <= v["value"] <= high:
                     beep("low" if v["value"] < low else "high")
 

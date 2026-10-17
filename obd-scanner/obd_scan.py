@@ -246,25 +246,78 @@ def run_ai(report, stamp, report_path=None):
 
 
 # 2,500rpm 保持の音の案内（運転席から PC を見なくてよいように）
+# (周波数 Hz, 長さ ms) の並び。0 Hz は無音。
 _BEEPS = {
-    "low": [(500, 180), (500, 180)],      # 低い「プッ、プッ」= もっと踏む
-    "high": [(1600, 120), (1600, 120)],   # 高い「ピッ、ピッ」= 踏みすぎ
-    "ok": [(1000, 120), (1000, 120)],     # 「ピピッ」= ちょうどいい
-    "start": [(1200, 300)],               # 記録開始
-    "done": [(900, 900)],                 # 長い「ピー」= 終わり。アクセルを戻す
+    "low": [(450, 220), (0, 80), (450, 220)],                       # 低い「ブッ、ブッ」= もっと踏む
+    "high": [(1800, 130), (0, 60), (1800, 130), (0, 60), (1800, 130)],  # 高い「ピピピ」= 踏みすぎ
+    "ok": [(1000, 120), (0, 60), (1300, 160)],                      # 「ピポッ」= ちょうどいい
+    "start": [(1300, 400)],                                         # 記録開始
+    "done": [(900, 1200)],                                          # 長い「ピー」= 終わり。アクセルを戻す
 }
 _BEEP_TEXT = {"low": "↑ もっと踏む", "high": "↓ 踏みすぎ", "ok": "◎ ちょうどいい（そのまま 3 秒）",
               "start": "● 記録中…そのまま保って", "done": "■ 終わり。アクセルを戻してください"}
+_WAV_CACHE = {}
+
+
+def _square_wav(tones, rate=22050, volume=0.95):
+    """矩形波の WAV を作る。正弦波（winsound.Beep）より耳につきやすく、エンジン音の中でも聞こえやすい。"""
+    import io
+    import struct
+    import wave
+    frames = bytearray()
+    peak = int(32767 * volume)
+    for freq, ms in tones:
+        n = int(rate * ms / 1000)
+        if freq <= 0:
+            frames += b"\x00\x00" * n
+            continue
+        half = rate / freq / 2
+        for i in range(n):
+            frames += struct.pack("<h", peak if int(i / half) % 2 == 0 else -peak)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(bytes(frames))
+    return buf.getvalue()
 
 
 def beep(kind):
-    print(f"   {_BEEP_TEXT[kind]}", flush=True)
+    print(f"\n   {_BEEP_TEXT[kind]}", flush=True)
     try:
         import winsound
-        for freq, ms in _BEEPS[kind]:
-            winsound.Beep(freq, ms)
+        if kind not in _WAV_CACHE:
+            _WAV_CACHE[kind] = _square_wav(_BEEPS[kind])
+        winsound.PlaySound(_WAV_CACHE[kind], winsound.SND_MEMORY)
     except (ImportError, RuntimeError):
         print("\a", end="", flush=True)  # Windows 以外は端末のベル
+
+
+def _enable_colors():
+    if os.name == "nt":
+        os.system("")  # Windows のコンソールで色の指定（ANSI）を有効にする
+
+
+def rpm_gauge(rpm, low, high, top=4000, width=40):
+    """タコメーター風の回転ゲージを 1 行で表示する（範囲内は緑、低いと黄、高いと赤）。"""
+    filled = max(0, min(width, round(rpm / top * width)))
+    lo_mark, hi_mark = round(low / top * width), round(high / top * width)
+    cells = []
+    for i in range(width):
+        if i < filled:
+            cells.append("█")
+        elif lo_mark <= i < hi_mark:
+            cells.append("░")  # 目標の範囲
+        else:
+            cells.append("·")
+    if low <= rpm <= high:
+        color, mark = "\033[92m", "◎ ちょうどいい"
+    elif rpm < low:
+        color, mark = "\033[93m", "↑ もっと踏む"
+    else:
+        color, mark = "\033[91m", "↓ 踏みすぎ"
+    print(f"\r   {color}{''.join(cells)} {rpm:>5} rpm  {mark}\033[0m   ", end="", flush=True)
 
 
 def ask_yes(prompt):
@@ -369,13 +422,16 @@ def run_stages(elm, report, reconnect, demo_fake=None):
 
     if ask_yes("\n2,500rpm で保持して測りますか？（触媒・リア O2 の確認用） [Enter = はい / n = いいえ]: "):
         print("\n運転席に移って、アクセルで回転を上げてください（2 分以内）。PC を見なくても音で案内します。")
-        print("   低い「プッ、プッ」= もっと踏む ／ 高い「ピッ、ピッ」= 踏みすぎ")
-        print("   「ピピッ」= ちょうどいい（2,200〜2,800rpm）→ 3 秒保つと自動で記録開始（15 秒）")
+        print("   低い「ブッ、ブッ」= もっと踏む ／ 高い「ピピピ」= 踏みすぎ")
+        print("   「ピポッ」= ちょうどいい（2,200〜2,800rpm）→ 3 秒保つと自動で記録開始（15 秒）")
         print("   長い「ピー」= 終わり。アクセルを戻してください")
+        print("   画面の回転ゲージも、ちょうどいいと緑になります（PC の音量は最大がおすすめ）")
         if demo_fake:
             demo_fake.rpm = 2500
+        _enable_colors()
         hold = with_retry(elm, reconnect, hold_rpm_guided, elm, supported, demo_beep if demo_fake else beep,
-                          poll=0.3 * pause, settle=3.0 * pause)
+                          poll=0.3 * pause, settle=3.0 * pause, on_rpm=rpm_gauge)
+        print()
         if demo_fake:
             demo_fake.rpm = 800
         if hold is None:

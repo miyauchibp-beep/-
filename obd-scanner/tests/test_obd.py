@@ -444,6 +444,21 @@ class StagedScanTest(unittest.TestCase):
         with mock.patch("time.sleep"):
             self.assertIsNone(scan.hold_rpm_guided(elm, set(), lambda k: None, timeout=0.05))
 
+    def test_beep_sound_and_gauge(self):
+        import contextlib
+        import io
+        import wave
+        import obd_scan
+        for kind, tones in obd_scan._BEEPS.items():
+            with wave.open(io.BytesIO(obd_scan._square_wav(tones))) as w:
+                self.assertGreater(w.getnframes(), 0, kind)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            obd_scan.rpm_gauge(2500, 2200, 2800)
+            obd_scan.rpm_gauge(1500, 2200, 2800)
+        self.assertIn("\033[92m", out.getvalue())   # 範囲内は緑
+        self.assertIn("もっと踏む", out.getvalue())
+
     def test_noninteractive_ask_is_no(self):
         import obd_scan
         from unittest import mock
