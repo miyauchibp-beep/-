@@ -29,7 +29,8 @@ try:
     from obd_scanner.ai_diag import AiDiagError, diagnose
     from obd_scanner.console import ask_port, remember_port, run_from_console
     from obd_scanner.elm327 import KNOWN_SETTINGS, Elm327, ObdError
-    from obd_scanner.scan import full_scan, read_live, supported_pids
+    from obd_scanner.scan import (full_scan, measure_running, read_coolant, read_live, read_rpm,
+                                  supported_pids, warmup_sample)
 except ImportError:
     print("obd_scanner フォルダが見つかりません。obd_scan.py と同じ場所にフォルダごとコピーしてください。")
     if os.name == "nt":
@@ -243,6 +244,112 @@ def run_ai(report, stamp, report_path=None):
     print(f"\n診断メモを保存しました: {md_path}")
 
 
+
+def ask_yes(prompt):
+    """[Enter = はい / n = いいえ]。対話できないとき（テスト・リダイレクト）は「いいえ」。"""
+    if not sys.stdin or not sys.stdin.isatty():
+        return False
+    return input(prompt).strip().lower() not in ("n", "no", "いいえ")
+
+
+def with_retry(elm, reconnect, func, *a, **kw):
+    """読み取り中に通信が切れたら（始動時の電圧低下など）、1 回だけ繋ぎ直してやり直す。"""
+    try:
+        return func(*a, **kw)
+    except ObdError:
+        reconnect()
+        return func(*a, **kw)
+
+
+def wait_for_engine(elm, reconnect, timeout=300, poll=1.0, on_poll=None):
+    """エンジン始動（回転数 > 0）を待つ。始動したら回転数、時間切れなら None。"""
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        if on_poll:
+            on_poll()
+        rpm = read_rpm(elm)
+        if rpm is None:
+            # クランキング中の電圧低下でアダプタや ECU との通信が切れることがある
+            try:
+                reconnect()
+            except ObdError:
+                pass
+        elif rpm > 0:
+            return rpm
+        time.sleep(poll)
+    return None
+
+
+def print_stage(title, st):
+    print(f"\n■ {title}（{st['measured_at'][11:16]}）")
+    for v in st["live"]:
+        print(f"   {v['name']:<16} {v['value']} {v['unit']}")
+    t = st.get("trend")
+    if t:
+        print(f"   ― {t['seconds']} 秒間の動き ―")
+        for it in t["items"]:
+            line = f"   {it['name']:<16} 最小 {it['min']} ／ 最大 {it['max']} ／ 平均 {it['avg']} {it['unit']}"
+            if "switches" in it:
+                line += f"（0.45V をまたいだ回数: {it['switches']} 回）"
+            print(line)
+    if st.get("pending_dtcs"):
+        print("   保留中の故障コード: " + "、".join(c["code"] for c in st["pending_dtcs"]))
+
+
+def run_stages(elm, report, reconnect, demo_fake=None):
+    """キー ON の読み取りのあと、エンジン始動 → アイドリング →（暖機）→（2,500rpm 保持）を続けて測る。"""
+    supported = {int(p, 16) for p in report.get("supported_pids", [])}
+    stages = {}
+    pause = 0 if demo_fake else 1
+
+    print("\n" + "=" * 50)
+    print("エンジンをかけてください。始動は自動で検知します（やめるときは Ctrl+C）。")
+    try:
+        rpm = wait_for_engine(elm, reconnect, poll=pause,
+                              on_poll=(lambda: setattr(demo_fake, "engine_running", True)) if demo_fake else None)
+    except KeyboardInterrupt:
+        print("\nエンジン始動後の測定はやめました。")
+        return stages
+    if rpm is None:
+        print("始動を検知できませんでした。エンジン停止中のデータだけで診断します。")
+        return stages
+    print(f"始動を確認しました（{rpm} rpm）。回転が落ち着くまで 10 秒待ちます...")
+    time.sleep(10 * pause)
+
+    print("アイドリングのデータを読んでいます（30 秒ほど）...")
+    stages["idle_after_start"] = with_retry(elm, reconnect, measure_running, elm, supported, 20)
+    print_stage("始動直後のアイドリング", stages["idle_after_start"])
+
+    coolant = read_coolant(elm)
+    if coolant is not None and coolant < 80 and ask_yes(
+            f"\n水温は {coolant}℃ です。80℃ まで暖機を待ちますか？ [Enter = 待つ / n = 待たない]: "):
+        print("暖機を待ちます。10 秒ごとに記録します（途中でやめるときは Ctrl+C）。")
+        log = []
+        try:
+            while True:
+                row = with_retry(elm, reconnect, warmup_sample, elm, supported)
+                log.append(row)
+                print(f"   {row['time'][11:19]}  水温 {row.get('05', '-')}℃  回転 {row.get('0C', '-')} rpm  "
+                      f"短期補正 {row.get('06', '-')}%  O2 {row.get('14', '-')}V")
+                if row.get("05") is not None and row["05"] >= 80:
+                    break
+                time.sleep(10 * pause)
+        except KeyboardInterrupt:
+            print("\n暖機の待機をやめました。")
+        stages["warmup_log"] = log
+        print("暖機後のアイドリングを読んでいます（30 秒ほど）...")
+        stages["idle_warm"] = with_retry(elm, reconnect, measure_running, elm, supported, 20)
+        print_stage("暖機後のアイドリング", stages["idle_warm"])
+
+    if ask_yes("\n2,500rpm 付近で保持して測りますか？（触媒・リア O2 の確認用） [Enter = はい / n = いいえ]: "):
+        input("アクセルで 2,500rpm 前後に保ち、安定したら Enter を押してください: ")
+        print("測っています（20 秒ほど）。そのまま保ってください...")
+        stages["hold_2500rpm"] = with_retry(elm, reconnect, measure_running, elm, supported, 15)
+        print("アクセルを戻してください。")
+        print_stage("2,500rpm 保持", stages["hold_2500rpm"])
+    return stages
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="OBD2 の故障コード・ライブデータを読み取る")
     ap.add_argument("port", nargs="?", help="アダプタの COM ポート（例: COM7）")
@@ -253,6 +360,8 @@ def main(argv=None):
                     help="--live で見る項目を絞る（例: 15 や 15,14,0C。o2 で O2 センサ 2 つと回転数）。少ないほど速く更新")
     ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
     ap.add_argument("--no-ai", action="store_true", help="Claude による診断をしない")
+    ap.add_argument("--single", action="store_true",
+                    help="エンジン始動をはさんだ段階ごとの測定をせず、今の状態を 1 回だけ読む")
     ap.add_argument("--trend", type=float, default=10.0, metavar="秒",
                     help="エンジン稼働中に続けて読む秒数（既定 10、0 で読まない）")
     ap.add_argument("--from-scan", metavar="JSON", nargs="?", const="latest",
@@ -277,9 +386,11 @@ def main(argv=None):
         run_ai(report, stamp)
         return 0
 
+    demo_fake = None
     if args.demo:
         from obd_scanner.simulator import FakeElm327
-        port = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        port = demo_fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        demo_fake.engine_running = False  # デモでは「キー ON → 始動」の流れを見せる
         saved = None
     else:
         port = ask_port(args.port)
@@ -323,11 +434,17 @@ def main(argv=None):
         print("読み取り中です（30 秒ほど。エンジンがかかっていれば、さらに O2 センサなどの動きを見ます）...")
         report = full_scan(elm, trend_seconds=args.trend)
         report["scanned_at"] = datetime.now().isoformat(timespec="seconds")
+        print_report(report)
+        if (report.get("generic_obd") and not report.get("engine_running") and not args.single
+                and (demo_fake or ask_yes("\n続けてエンジンをかけて、アイドリングも測りますか？ [Enter = はい / n = いいえ]: "))):
+            stages = run_stages(elm, report, lambda: elm.connect(protocol=protocol, extra_init=extra, reset=reset),
+                                demo_fake=demo_fake)
+            if stages:
+                report["stages"] = stages
     finally:
         elm.close()
         raw_file.close()
 
-    print_report(report)
     path = os.path.join("scan_logs", f"scan_{stamp}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)

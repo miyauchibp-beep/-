@@ -20,6 +20,8 @@ class FakeElm327:
         self.generic_obd = generic_obd
         self.dtcs = list(dtcs)
         self.engine_running = True
+        self.coolant = 83        # 冷却水温（℃）
+        self.coolant_step = 0    # 0105 を読むたびに上がる量（暖機のまね）
         self._tick = 0  # O2 センサなどを時間で変化させるためのカウンタ
         self._out = bytearray()
         self.sent = []
@@ -120,7 +122,7 @@ class FakeElm327:
             "0101": f"41 01 {(0x80 if self.dtcs else 0) | len(self.dtcs):02X} 07 65 00",
             "010C": "41 0C 0C 80" if self.engine_running else "41 0C 00 00",
             "010D": "41 0D 00",
-            "0105": "41 05 7B",
+            "0105": f"41 05 {self.coolant + 40:02X}",
             "0104": "41 04 40",
             "0111": "41 11 26",
             "010F": "41 0F 3C",
@@ -135,6 +137,8 @@ class FakeElm327:
             "020C00": "42 0C 00 19 00",
             "020500": "42 05 00 7B",
         }
+        if cmd == "0105":
+            self.coolant = min(self.coolant + self.coolant_step, 95)
         if cmd in ("0114", "0115", "0106"):
             self._tick += 1
         # フロント O2 は 0.2V と 0.7V を 2 回ごとに行き来、リア O2 は 0.65V 前後で安定

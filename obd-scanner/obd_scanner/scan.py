@@ -1,6 +1,7 @@
 """接続済みの Elm327 から、診断に必要なデータを一通り読み取る（読み取りのみ）。"""
 
 import time
+from datetime import datetime
 
 from . import dtc, pids
 from .elm327 import ObdError, parse_response
@@ -204,3 +205,54 @@ def full_scan(elm, trend_seconds=10.0):
     if report["engine_running"] and trend_seconds > 0:
         report["trend"] = sample_trend(elm, supported, trend_seconds)
     return report
+
+
+# ---- エンジン始動をはさんだ段階ごとの測定 ----
+
+WARMUP_PIDS = [0x05, 0x0C, 0x06, 0x07, 0x14, 0x15]
+
+
+def read_rpm(elm):
+    """エンジン回転数。読めなければ None。"""
+    try:
+        bodies = elm.query(0x01, 0x0C)
+    except ObdError:
+        return None
+    decoded = pids.decode(0x0C, bodies[0]) if bodies else None
+    return decoded[0] if decoded else None
+
+
+def read_coolant(elm):
+    try:
+        bodies = elm.query(0x01, 0x05)
+    except ObdError:
+        return None
+    decoded = pids.decode(0x05, bodies[0]) if bodies else None
+    return decoded[0] if decoded else None
+
+
+def read_pending(elm):
+    try:
+        codes = dtc.parse_dtc_response(elm.query(0x07), elm.is_can)
+    except ObdError:
+        codes = []
+    return [{"code": c, "description": dtc.describe(c)} for c in codes]
+
+
+def measure_running(elm, supported, trend_seconds=20.0):
+    """エンジン稼働中の 1 段階分: ライブデータ全部・数秒間の動き・保留中の故障コード。"""
+    live_pids = [p for p in pids.PIDS if p in supported]
+    return {
+        "measured_at": datetime.now().isoformat(timespec="seconds"),
+        "live": read_live(elm, live_pids),
+        "trend": sample_trend(elm, supported, trend_seconds) if trend_seconds > 0 else None,
+        "pending_dtcs": read_pending(elm),
+    }
+
+
+def warmup_sample(elm, supported):
+    """暖機中の記録 1 回分（水温・回転・燃料補正・O2）。"""
+    row = {"time": datetime.now().isoformat(timespec="seconds")}
+    for v in read_live(elm, [p for p in WARMUP_PIDS if p in supported]):
+        row[v["pid"]] = v["value"]
+    return row

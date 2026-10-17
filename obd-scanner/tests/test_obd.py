@@ -381,6 +381,57 @@ class ConnectAnyTest(unittest.TestCase):
                 obd_scan.connect_any(elm, None)
 
 
+class StagedScanTest(unittest.TestCase):
+    """キー ON → 始動 → アイドリング →（暖機）→（2,500rpm）を 1 回で測る流れ。"""
+
+    def _setup(self, coolant=83, step=0):
+        from obd_scanner.scan import full_scan
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        fake.engine_running = False
+        fake.coolant, fake.coolant_step = coolant, step
+        elm = Elm327(fake)
+        elm.connect()
+        report = full_scan(elm, trend_seconds=0)
+        return fake, elm, report
+
+    def _run(self, fake, elm, report, answers):
+        import contextlib
+        import io
+        from unittest import mock
+        import obd_scan
+        answers = iter(answers)
+        with mock.patch.object(obd_scan, "ask_yes", lambda prompt: next(answers)), \
+                mock.patch("builtins.input", return_value=""), \
+                mock.patch("time.sleep"), contextlib.redirect_stdout(io.StringIO()):
+            return obd_scan.run_stages(elm, report, elm.connect, demo_fake=fake)
+
+    def test_engine_off_report_then_idle(self):
+        fake, elm, report = self._setup()
+        self.assertFalse(report["engine_running"])
+        stages = self._run(fake, elm, report, [False])  # 2,500rpm はしない
+        self.assertEqual(list(stages), ["idle_after_start"])
+        live = {v["pid"]: v["value"] for v in stages["idle_after_start"]["live"]}
+        self.assertEqual(live["0C"], 800)
+        self.assertIsNotNone(stages["idle_after_start"]["trend"])
+
+    def test_warmup_and_2500(self):
+        fake, elm, report = self._setup(coolant=60, step=5)
+        stages = self._run(fake, elm, report, [True, True])  # 暖機を待つ・2,500rpm も測る
+        self.assertEqual(list(stages), ["idle_after_start", "warmup_log", "idle_warm", "hold_2500rpm"])
+        self.assertGreaterEqual(stages["warmup_log"][-1]["05"], 80)
+
+    def test_noninteractive_ask_is_no(self):
+        import obd_scan
+        from unittest import mock
+        with mock.patch("sys.stdin", io_stub()):
+            self.assertFalse(obd_scan.ask_yes("?"))
+
+
+def io_stub():
+    import io
+    return io.StringIO("")
+
+
 class PidListTest(unittest.TestCase):
     def test_parse(self):
         import obd_scan
