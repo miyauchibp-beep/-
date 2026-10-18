@@ -20,6 +20,7 @@ FILES = [
     "obd_scanner/ai_diag.py",
     # PC の Claude Code で作業を続けるための経緯・構想メモ
     "HANDOFF.md",
+    "APP_SPEC.md",
     "ROADMAP.md",
     "README.md",
 ]
