@@ -242,8 +242,15 @@ function findItem_(form, title) {
   return null;
 }
 
+/**
+ * 基準にする質問を探す。完全一致がなければ、タイトルが title で始まる質問を使う
+ * （例：「問い合わせ内容　使用フルードやその他の要望があれば…」）
+ */
 function requireItem_(form, title) {
-  const item = findItem_(form, title);
+  const key = normalizeTitle_(title);
+  const item = findItem_(form, title) || form.getItems().filter(function (it) {
+    return normalizeTitle_(it.getTitle()).indexOf(key) === 0;
+  })[0];
   if (!item) {
     throw new Error(
       '「' + form.getTitle() + '」に「' + title + '」という質問が見つかりません。' +
