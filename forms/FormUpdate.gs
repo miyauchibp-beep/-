@@ -198,7 +198,7 @@ function insertBefore_(form, anchorTitle, specs) {
   specs.forEach(function (spec) {
     const result = addQuestion_(form, spec);
     if (!result.created) return;
-    form.moveItem(result.item, requireItem_(form, anchorTitle).getIndex());
+    form.moveItem(result.item.getIndex(), requireItem_(form, anchorTitle).getIndex());
   });
 }
 
@@ -208,7 +208,7 @@ function insertAfter_(form, anchorTitle, specs) {
   specs.forEach(function (spec) {
     const result = addQuestion_(form, spec);
     if (result.created) {
-      form.moveItem(result.item, requireItem_(form, prevTitle).getIndex() + 1);
+      form.moveItem(result.item.getIndex(), requireItem_(form, prevTitle).getIndex() + 1);
     }
     prevTitle = spec.title;
   });
