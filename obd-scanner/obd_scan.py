@@ -30,7 +30,7 @@ try:
     from obd_scanner.console import ask_port, remember_port, run_from_console
     from obd_scanner.elm327 import KNOWN_SETTINGS, Elm327, ObdError
     from obd_scanner.scan import (full_scan, hold_rpm_guided, measure_running, read_coolant, read_live,
-                                  read_rpm, supported_pids, warmup_sample)
+                                  read_rpm, record_cranking, supported_pids, warmup_sample)
 except ImportError:
     print("obd_scanner フォルダが見つかりません。obd_scan.py と同じ場所にフォルダごとコピーしてください。")
     if os.name == "nt":
@@ -327,6 +327,52 @@ def ask_yes(prompt):
     return input(prompt).strip().lower() not in ("n", "no", "いいえ")
 
 
+def ask_choice(prompt, choices, default):
+    """番号で選ぶ。Enter は default。対話できないときは None。"""
+    if not sys.stdin or not sys.stdin.isatty():
+        return None
+    while True:
+        ans = input(prompt).strip() or default
+        if ans in choices:
+            return ans
+        print(f"  {' / '.join(choices)} のどれかを入れてください")
+
+
+def run_cranking(elm, report, reconnect, demo_fake=None):
+    """エンジンがかからない車: セルを回している間の電圧・回転数・吸気管圧力を記録する。"""
+    supported = {int(p, 16) for p in report.get("supported_pids", [])}
+    print("\n" + "=" * 50)
+    print("キーを回してセルを回してください（5〜10 秒。1 分以内に）。")
+    print("記録は自動で始まり、セルを止めて 3 秒たつと終わります（やめるときは Ctrl+C）。")
+    if demo_fake:
+        # デモ: 静止電圧を読んだあとでセルを回したことにする
+        rest_read = elm.battery_voltage
+
+        def demo_voltage():
+            v = rest_read()
+            demo_fake.voltage, demo_fake.engine_running, demo_fake.rpm = 9.8, True, 220
+            return v
+        elm.battery_voltage = demo_voltage
+    show = lambda r: print(f"   {r['t']:>5.1f} 秒  電圧 {r['voltage'] if r['voltage'] is not None else '-':>5} V  "
+                           f"回転 {r['rpm'] if r['rpm'] is not None else '-':>5} rpm  "
+                           f"吸気管圧力 {r['map_kpa'] if r['map_kpa'] is not None else '-'} kPa", flush=True)
+    try:
+        crank = with_retry(elm, reconnect, record_cranking, elm, supported,
+                           max_seconds=0.05 if demo_fake else 20.0, poll=0 if demo_fake else 0.1, on_sample=show)
+    except KeyboardInterrupt:
+        print("\nクランキングの記録はやめました。")
+        return None
+    if crank is None:
+        print("セルが回されたのを検知できませんでした（電圧が下がらず、回転も出ませんでした）。")
+        return None
+    print(f"\n■ クランキングの記録: 静止時 {crank['resting_voltage']} V → 最低 {crank['min_voltage']} V、"
+          f"最高回転 {crank['max_rpm']} rpm"
+          + ("（エンジンがかかりました）" if crank["started"] else ""))
+    if not crank["rpm_seen"]:
+        print("   ※ ECU が回転を認識していません（回転数 0 のまま）。")
+    return crank
+
+
 def with_retry(elm, reconnect, func, *a, **kw):
     """読み取り中に通信が切れたら（始動時の電圧低下など）、1 回だけ繋ぎ直してやり直す。"""
     try:
@@ -527,12 +573,22 @@ def main(argv=None):
         report = full_scan(elm, trend_seconds=args.trend)
         report["scanned_at"] = datetime.now().isoformat(timespec="seconds")
         print_report(report)
-        if (report.get("generic_obd") and not report.get("engine_running") and not args.single
-                and (demo_fake or ask_yes("\n続けてエンジンをかけて、アイドリングも測りますか？ [Enter = はい / n = いいえ]: "))):
-            stages = run_stages(elm, report, lambda: elm.connect(protocol=protocol, extra_init=extra, reset=reset),
-                                demo_fake=demo_fake)
-            if stages:
-                report["stages"] = stages
+        if report.get("generic_obd") and not report.get("engine_running") and not args.single:
+            choice = "1" if demo_fake else ask_choice(
+                "\n次はどうしますか？\n"
+                "  1 = エンジンをかけて、アイドリングなども測る\n"
+                "  2 = エンジンがかからない（セルを回している間を記録する）\n"
+                "  3 = ここで終わる\n"
+                "番号を入れて Enter（何も入れなければ 1）: ", ("1", "2", "3"), "1")
+            reconnect = lambda: elm.connect(protocol=protocol, extra_init=extra, reset=reset)
+            if choice == "1":
+                stages = run_stages(elm, report, reconnect, demo_fake=demo_fake)
+                if stages:
+                    report["stages"] = stages
+            elif choice == "2":
+                crank = run_cranking(elm, report, reconnect)
+                if crank:
+                    report["stages"] = {"cranking": crank}
     finally:
         elm.close()
         raw_file.close()

@@ -21,6 +21,7 @@ class FakeElm327:
         self.dtcs = list(dtcs)
         self.engine_running = True
         self.rpm = 800           # エンジン稼働中の回転数
+        self.voltage = 12.4      # バッテリー電圧（ATRV）
         self.coolant = 83        # 冷却水温（℃）
         self.coolant_step = 0    # 0105 を読むたびに上がる量（暖機のまね）
         self._tick = 0  # O2 センサなどを時間で変化させるためのカウンタ
@@ -70,7 +71,7 @@ class FakeElm327:
         if arg == "I":
             return "ELM327 v1.5"
         if arg == "RV":
-            return "12.4V"
+            return f"{self.voltage:.1f}V"
         if arg in ("E0", "E1"):
             self.echo = arg == "E1"
         elif arg in ("S0", "S1"):

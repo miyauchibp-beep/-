@@ -317,3 +317,62 @@ def hold_rpm_guided(elm, supported, beep, target=2500, band=300, settle=3.0, dur
         "trend": trend,
         "pending_dtcs": read_pending(elm),
     }
+
+
+# ---- エンジンがかからない車: クランキング中の記録 ----
+
+def record_cranking(elm, supported, wait_timeout=60.0, max_seconds=20.0, poll=0.0, on_sample=None):
+    """セルを回している間の電圧・回転数・吸気管圧力を記録する。
+
+    電圧はアダプタが測るので、ECU が回転を認識していなくてもクランキングを検知できる
+    （静止時より 1V 以上下がったら開始）。回転が 0 のまま電圧が戻って 3 秒たったら終わり。
+    回転が 500rpm 以上で 3 秒続いたら「始動した」として終わる。
+    セルが回されないまま wait_timeout 秒たったら None。
+    """
+    rest = elm.battery_voltage()
+    if rest is None:
+        return None
+    pid_list = [p for p in (0x0C, 0x0B) if p in supported]
+    samples = []
+    t0 = None
+    start_wait = time.monotonic()
+    quiet_since = running_since = None
+    while True:
+        now = time.monotonic()
+        try:
+            volt = elm.battery_voltage()
+            values = {v["pid"]: v["value"] for v in read_live(elm, pid_list)}
+        except ObdError:
+            volt, values = None, {}  # 電圧が下がりすぎてアダプタが一瞬止まることがある
+        rpm = values.get("0C")
+        cranking = (volt is not None and volt < rest - 1.0) or (rpm or 0) > 0
+        if t0 is None:
+            if not cranking:
+                if now - start_wait > wait_timeout:
+                    return None
+                time.sleep(poll)
+                continue
+            t0 = now
+        row = {"t": round(now - t0, 2), "voltage": volt, "rpm": rpm, "map_kpa": values.get("0B")}
+        samples.append(row)
+        if on_sample:
+            on_sample(row)
+        running_since = (running_since or now) if (rpm or 0) >= 500 else None
+        quiet_since = (quiet_since or now) if not cranking else None
+        started = running_since is not None and now - running_since >= 3
+        if started or (quiet_since and now - quiet_since >= 3) or now - t0 >= max_seconds:
+            break
+        time.sleep(poll)
+    crank = [s for s in samples if s["voltage"] is not None]
+    rpms = [s["rpm"] for s in samples if s["rpm"] is not None]
+    return {
+        "measured_at": datetime.now().isoformat(timespec="seconds"),
+        "resting_voltage": rest,
+        "min_voltage": min((s["voltage"] for s in crank), default=None),
+        "max_rpm": max(rpms, default=None),
+        "rpm_seen": any(r > 0 for r in rpms),
+        "started": started,
+        "seconds": samples[-1]["t"] if samples else 0,
+        "samples": samples,
+        "pending_dtcs": read_pending(elm),
+    }

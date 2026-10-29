@@ -471,6 +471,72 @@ def io_stub():
     return io.StringIO("")
 
 
+class CrankingTest(unittest.TestCase):
+    """エンジンがかからない車: セルを回している間の記録。"""
+
+    def _elm(self):
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        fake.engine_running = False
+        elm = Elm327(fake)
+        elm.connect()
+        return fake, elm
+
+    def test_records_voltage_drop_and_rpm(self):
+        from unittest import mock
+        from obd_scanner import scan
+        fake, elm = self._elm()
+        rows = []
+
+        def crank_then_stop(row):
+            rows.append(row)
+            if len(rows) == 5:  # セルを止める
+                fake.voltage, fake.engine_running = 12.3, False
+        orig = elm.battery_voltage
+        calls = {"n": 0}
+
+        def volt():
+            calls["n"] += 1
+            if calls["n"] == 2:  # 最初の静止電圧のあとでセルを回し始める
+                fake.voltage, fake.engine_running, fake.rpm = 9.6, True, 210
+            return orig()
+        with mock.patch.object(elm, "battery_voltage", volt), mock.patch("time.sleep"):
+            crank = scan.record_cranking(elm, {0x0C, 0x0B}, max_seconds=0.2, on_sample=crank_then_stop)
+        self.assertEqual(crank["resting_voltage"], 12.4)
+        self.assertEqual(crank["min_voltage"], 9.6)
+        self.assertEqual(crank["max_rpm"], 210)
+        self.assertTrue(crank["rpm_seen"])
+        self.assertFalse(crank["started"])
+
+    def test_no_rpm_seen(self):
+        # ECU が回転を認識しない（クランク角センサー系の不良など）でも、電圧の落ち込みで記録できる
+        from unittest import mock
+        from obd_scanner import scan
+        fake, elm = self._elm()
+        orig = elm.battery_voltage
+        calls = {"n": 0}
+
+        def volt():
+            calls["n"] += 1
+            if calls["n"] == 2:
+                fake.voltage = 10.1
+            return orig()
+        with mock.patch.object(elm, "battery_voltage", volt), mock.patch("time.sleep"):
+            crank = scan.record_cranking(elm, {0x0C, 0x0B}, max_seconds=0.1)
+        self.assertFalse(crank["rpm_seen"])
+        self.assertEqual(crank["min_voltage"], 10.1)
+
+    def test_no_cranking_times_out(self):
+        from unittest import mock
+        from obd_scanner import scan
+        fake, elm = self._elm()
+        with mock.patch("time.sleep"):
+            self.assertIsNone(scan.record_cranking(elm, {0x0C}, wait_timeout=0.05))
+
+    def test_prompt_explains_cranking(self):
+        from obd_scanner.ai_diag import SYSTEM_PROMPT
+        self.assertIn("rpm_seen", SYSTEM_PROMPT)
+
+
 class PidListTest(unittest.TestCase):
     def test_parse(self):
         import obd_scan
