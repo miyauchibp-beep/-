@@ -100,14 +100,28 @@ def read_live(elm, pid_list):
 
 
 def read_freeze_frame(elm):
-    """フリーズフレーム（故障が記録された瞬間のデータ）を読む。記録がなければ None。"""
+    """フリーズフレーム（故障が記録された瞬間のデータ）を読む。記録がなければ None。
+
+    エンジン ECU だけに問い合わせている車で記録がなければ、全 ECU 宛てでも読む
+    （ミッションのコード、例: バネットの P0731 の記録はミッション側にあることがある）。
+    """
+    ff = _read_freeze_frame(elm)
+    if ff is None and elm.engine_only:
+        with elm.all_ecus():
+            ff = _read_freeze_frame(elm)
+    return ff
+
+
+def _read_freeze_frame(elm):
     try:
-        cause = _freeze_query(elm, 0x02)
+        causes = _freeze_query(elm, 0x02)
     except ObdError:
         return None
-    if not cause or cause[0][:2] in ([0, 0], []):
+    # 複数の ECU が答えたときは、記録がある（00 00 でない）ものを使う
+    cause = next((c for c in causes if len(c) >= 2 and c[:2] != [0, 0]), None)
+    if cause is None:
         return None
-    code = dtc.decode_pair(cause[0][0], cause[0][1]) if len(cause[0]) >= 2 else None
+    code = dtc.decode_pair(cause[0], cause[1])
     values = []
     for pid in pids.DEFAULT_LIVE + [0x03, 0x05, 0x0D]:
         p = pids.PIDS.get(pid)

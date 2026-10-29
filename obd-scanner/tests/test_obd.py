@@ -385,12 +385,23 @@ class TwoEcuTest(unittest.TestCase):
         self.assertEqual(r["status"]["dtc_count"], 1)
         live = {v["pid"]: v["value"] for v in r["live"]}
         self.assertEqual(live["05"], 83)
-        # 故障コードは全 ECU 宛てで読み、ミッションの P0700 も拾う
+        # 故障コードは全 ECU 宛てで読み、ミッションの P0731 も拾う
         codes = [d["code"] for d in r["dtcs"]["stored"]]
-        self.assertEqual(sorted(codes), ["P0420", "P0700"])
+        self.assertEqual(sorted(codes), ["P0420", "P0731"])
         i = fake.sent.index("03")
         self.assertEqual(fake.sent[i - 1], "ATSH7DF")
         self.assertEqual(fake.sent[i + 1], "ATSH7E0")
+
+    def test_freeze_frame_from_transmission(self):
+        from obd_scanner.scan import read_freeze_frame
+        # エンジンには記録がなく、ミッションに P0731 の記録がある
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False, dtcs=(), second_ecu=True)
+        elm = Elm327(fake)
+        elm.connect()
+        ff = read_freeze_frame(elm)
+        self.assertEqual(ff["dtc"], "P0731")
+        self.assertIn({"pid": "0D", "name": "車速", "value": 12, "unit": "km/h"}, ff["values"])
+        self.assertEqual(fake.sent[-1], "ATSH7E0")  # 読んだあとはエンジン宛てに戻す
 
     def test_single_ecu_unchanged(self):
         fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)

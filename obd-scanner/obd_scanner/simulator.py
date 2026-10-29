@@ -179,7 +179,8 @@ class FakeElm327:
         if self.second_ecu and self._is_can and self.header not in ("7E0", "DA10F1"):
             # ミッション ECU の応答。バネットの実車と同じく、エンジンより先に返ることがある
             tcm = {"0100": "41 00 98 1C 80 11", "0101": "41 01 00 04 00 00", "0105": "41 05 4C",
-                   "03": "43 01 07 00", "07": "47 00"}.get(cmd)
+                   "03": "43 01 07 31", "07": "47 00",  # ミッションに P0731
+                   "020200": "42 02 00 07 31", "020D00": "42 0D 00 0C"}.get(cmd)
             if tcm:
                 reply = tcm + "\r" + reply
         text = (prefix if self._just_connected else "") + reply
