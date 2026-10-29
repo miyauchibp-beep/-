@@ -369,6 +369,53 @@ class RealNwgnCrankTest(unittest.TestCase):
         self.assertFalse(crank["started"])
 
 
+class TwoEcuTest(unittest.TestCase):
+    """CAN でエンジンとミッションの 2 つの ECU が答える車（2026-10-29 バネット）。"""
+
+    def test_engine_only_after_connect(self):
+        from obd_scanner.scan import full_scan
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False, dtcs=("P0420",), second_ecu=True)
+        elm = Elm327(fake)
+        elm.connect()
+        self.assertTrue(elm.engine_only)
+        self.assertIn("ATSH7E0", fake.sent)
+        r = full_scan(elm, trend_seconds=0)
+        # レディネス・水温はエンジン ECU の値（ミッションの 41 01 00 04 00 00 が混ざらない）
+        self.assertTrue(r["status"]["mil"])
+        self.assertEqual(r["status"]["dtc_count"], 1)
+        live = {v["pid"]: v["value"] for v in r["live"]}
+        self.assertEqual(live["05"], 83)
+        # 故障コードは全 ECU 宛てで読み、ミッションの P0700 も拾う
+        codes = [d["code"] for d in r["dtcs"]["stored"]]
+        self.assertEqual(sorted(codes), ["P0420", "P0700"])
+        i = fake.sent.index("03")
+        self.assertEqual(fake.sent[i - 1], "ATSH7DF")
+        self.assertEqual(fake.sent[i + 1], "ATSH7E0")
+
+    def test_single_ecu_unchanged(self):
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        elm = Elm327(fake)
+        elm.connect()
+        self.assertFalse(elm.engine_only)
+        self.assertFalse(any(c.startswith("ATSH") for c in fake.sent))
+
+    def test_vanette_replay(self):
+        from obd_scanner.scan import full_scan
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "vanette_skp2_raw_20261029.txt")
+        elm = Elm327(ReplayAdapter(path, sequential=True))
+        with self.assertRaises(ObdError):
+            elm.connect(protocol="7")
+        elm.connect(protocol="0")
+        r = full_scan(elm, trend_seconds=0)
+        self.assertEqual(r["vin"], "SKP2MN101494")
+        sup = r["supported_pids"]
+        # 2 つの ECU の対応表を合わせる（以前はエンジンの 43〜4C や A/F センサの読み落としがあった）
+        for pid in ("34", "43", "44", "49", "4C"):
+            self.assertIn(pid, sup)
+        self.assertEqual(r["status"]["dtc_count"], 0)
+        self.assertEqual(r["dtcs"]["stored"], [])
+
+
 class AfSensorTest(unittest.TestCase):
     def test_pid34_lambda(self):
         # バネット（マツダ L8）は PID 14 がなく、PID 34（A/F センサ）に対応

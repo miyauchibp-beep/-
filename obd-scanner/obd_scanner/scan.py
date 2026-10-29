@@ -18,8 +18,9 @@ def supported_pids(elm):
             break
         if not bodies:
             break
-        found = pids.supported_from_bitmap(base, bodies[0])
-        supported.extend(found)
+        # 複数の ECU が答えたときは、どれかが対応していれば読む
+        found = sorted({p for body in bodies for p in pids.supported_from_bitmap(base, body)})
+        supported.extend(p for p in found if p not in supported)
         if base + 0x20 not in found:
             break
         base += 0x20
@@ -71,7 +72,8 @@ def read_dtcs(elm):
     result = {}
     for mode, key in ((0x03, "stored"), (0x07, "pending"), (0x0A, "permanent")):
         try:
-            codes = dtc.parse_dtc_response(elm.query(mode), elm.is_can)
+            with elm.all_ecus():
+                codes = dtc.parse_dtc_response(elm.query(mode), elm.is_can)
         except ObdError:
             codes = []
         result[key] = [{"code": c, "description": dtc.describe(c)} for c in codes]
@@ -236,7 +238,8 @@ def read_coolant(elm):
 
 def read_pending(elm):
     try:
-        codes = dtc.parse_dtc_response(elm.query(0x07), elm.is_can)
+        with elm.all_ecus():
+            codes = dtc.parse_dtc_response(elm.query(0x07), elm.is_can)
     except ObdError:
         codes = []
     return [{"code": c, "description": dtc.describe(c)} for c in codes]

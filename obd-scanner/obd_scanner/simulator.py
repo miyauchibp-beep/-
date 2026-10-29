@@ -10,7 +10,8 @@ import re
 
 class FakeElm327:
     def __init__(self, vehicle_protocol="4", needs_kw0=True, dtcs=("P0301", "P0420"),
-                 init_address="33", generic_obd=True, init_baud="10", hybrid=False):
+                 init_address="33", generic_obd=True, init_baud="10", hybrid=False,
+                 second_ecu=False):
         """init_address: ECU が返事をする初期化アドレス（国内独自の車は 33 以外）
         generic_obd: False なら共通規格（01/03）に答えず、KWP の 1A/21 だけ答える"""
         self.vehicle_protocol = vehicle_protocol
@@ -18,6 +19,8 @@ class FakeElm327:
         self.init_address = init_address
         self.init_baud = init_baud  # トヨタの古い K-line は 96（9600bps）
         self.generic_obd = generic_obd
+        # True ならミッション ECU も答える（CAN で全 ECU 宛てのとき。バネットの再現）
+        self.second_ecu = second_ecu
         self.hybrid = hybrid     # True なら燃料の種類（PID 51）とハイブリッドバッテリー残量（PID 5B）に答える
         self.dtcs = list(dtcs)
         self.engine_running = True
@@ -173,6 +176,12 @@ class FakeElm327:
                 reply = "\r".join(lines) if lines else "43 00 00 00 00 00 00"
         else:
             reply = table.get(cmd, "NO DATA")
+        if self.second_ecu and self._is_can and self.header not in ("7E0", "DA10F1"):
+            # ミッション ECU の応答。バネットの実車と同じく、エンジンより先に返ることがある
+            tcm = {"0100": "41 00 98 1C 80 11", "0101": "41 01 00 04 00 00", "0105": "41 05 4C",
+                   "03": "43 01 07 00", "07": "47 00"}.get(cmd)
+            if tcm:
+                reply = tcm + "\r" + reply
         text = (prefix if self._just_connected else "") + reply
         self._just_connected = False
         return text if self.spaces else text.replace(" ", "")
