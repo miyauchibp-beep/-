@@ -378,6 +378,7 @@ def run_free(elm, report, reconnect, demo_fake=None):
     show = lambda r: print(f"   {r['t']:>6.1f} 秒  回転 {fmt(r.get('0C'))} rpm  水温 {fmt(r.get('05'), 3)} °C  "
                            f"O2 前 {fmt(r.get('14'))} 後 {fmt(r.get('15'))} V  "
                            f"補正 {fmt(r.get('06'))} %  電圧 {fmt(r.get('voltage'), 4)} V"
+                           + (f"  A/F λ {r['34']}" if "34" in r else "")
                            + (f"  HV残量 {r['5B']} %" if "5B" in r else ""), flush=True)
     free = record_free(elm, supported, seconds=minutes * 60, interval=0 if demo_fake else 2.0,
                        on_sample=show, reconnect=reconnect, max_samples=5 if demo_fake else None)
@@ -511,7 +512,9 @@ def run_stages(elm, report, reconnect, demo_fake=None):
                 row = with_retry(elm, reconnect, warmup_sample, elm, supported)
                 log.append(row)
                 print(f"   {row['time'][11:19]}  水温 {row.get('05', '-')}℃  回転 {row.get('0C', '-')} rpm  "
-                      f"短期補正 {row.get('06', '-')}%  O2 {row.get('14', '-')}V")
+                      f"短期補正 {row.get('06', '-')}%  "
+                      + (f"A/F λ {row['34']}" if "34" in row else f"O2 前 {row.get('14', '-')}V")
+                      + f"  後 {row.get('15', '-')}V")
                 if row.get("05") is not None and row["05"] >= 80:
                     break
                 time.sleep(10 * pause)

@@ -283,20 +283,30 @@ class AiDiagTest(unittest.TestCase):
 
 
 class ReplayAdapter:
-    """実車の通信記録（scan_logs/raw_*.txt）の応答をそのまま返す疑似アダプタ。"""
+    """実車の通信記録（scan_logs/raw_*.txt）の応答をそのまま返す疑似アダプタ。
 
-    def __init__(self, path):
+    sequential=True なら、同じコマンドへの応答を記録の順に返す（最後の応答はくり返す）。
+    """
+
+    def __init__(self, path, sequential=False):
         self.replies = {}
+        self.sequential = sequential
         with open(path, encoding="utf-8") as f:
             for line in f:
                 if line.startswith("> "):
                     cmd, _, reply = line[2:].rstrip("\n").partition(" ")
-                    self.replies.setdefault(cmd, reply.strip().replace(" | ", "\r"))
+                    self.replies.setdefault(cmd, []).append(reply.strip().replace(" | ", "\r"))
         self._out = bytearray()
 
     def write(self, data):
         cmd = data.decode("ascii").strip().upper()
-        reply = self.replies.get(cmd, "OK" if cmd.startswith("AT") else "NO DATA")
+        queue = self.replies.get(cmd)
+        if not queue:
+            reply = "OK" if cmd.startswith("AT") else "NO DATA"
+        elif self.sequential and len(queue) > 1:
+            reply = queue.pop(0)
+        else:
+            reply = queue[0]
         self._out.extend((reply + "\r\r>").encode("ascii"))
 
     def read(self, size=1):
@@ -328,6 +338,43 @@ class RealNze121Test(unittest.TestCase):
         self.assertEqual(live["15"], 0.0)       # リア O2 は ECU が 0V と返している
         self.assertEqual(live["14"], 0.055)
         self.assertTrue(r["engine_running"])
+
+
+class RealNwgnCrankTest(unittest.TestCase):
+    """2026-10-29 ホンダ Nワゴン JH1（CAN 29bit、始動不良・プラグかぶり）の実際の応答。"""
+
+    def test_scan_and_cranking(self):
+        from unittest import mock
+        from obd_scanner.scan import full_scan, record_cranking
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "nwgn_jh1_crank_raw_20261029.txt")
+        elm = Elm327(ReplayAdapter(path, sequential=True))
+        with self.assertRaises(ObdError):
+            elm.connect(protocol="6")   # 前回の設定（CAN 11bit）は NO DATA
+        elm.connect(protocol="0")
+        r = full_scan(elm, trend_seconds=0)
+        self.assertEqual(r["vin"], "JH1-1003971")
+        self.assertEqual(r["calibration_id"], "37805-5Z1-J760U")
+        self.assertFalse(r["engine_running"])
+        live = {v["pid"]: v["value"] for v in r["live"]}
+        self.assertEqual(live["15"], 1.275)  # 冷えたキー ON でリア O2 は FF（上限）
+        # 1 周 0.43 秒（実車と同じ）として進む時計。scan モジュールの time だけを差し替える
+        clock = iter(i * 0.43 for i in range(10000))
+        fake_time = types.SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda s: None)
+        with mock.patch("obd_scanner.scan.time", fake_time):
+            crank = record_cranking(elm, {int(p, 16) for p in r["supported_pids"]})
+        self.assertEqual(crank["resting_voltage"], 11.9)
+        self.assertEqual(crank["min_voltage"], 9.2)
+        self.assertEqual(crank["max_rpm"], 475)
+        self.assertTrue(crank["rpm_seen"])
+        self.assertFalse(crank["started"])
+
+
+class AfSensorTest(unittest.TestCase):
+    def test_pid34_lambda(self):
+        # バネット（マツダ L8）は PID 14 がなく、PID 34（A/F センサ）に対応
+        self.assertEqual(pids.decode(0x34, [0x80, 0x00, 0x80, 0x00]), (1.0, ""))
+        self.assertEqual(pids.decode(0x34, [0x7A, 0xE1, 0x7F, 0x00])[0], 0.96)
+        self.assertEqual(pids.decode(0x30, [12]), (12, "回"))
 
 
 class ConnectAnyTest(unittest.TestCase):

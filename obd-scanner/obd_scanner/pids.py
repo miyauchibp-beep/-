@@ -25,6 +25,11 @@ def _temp(d):
     return d[0] - 40
 
 
+def _lambda(d):
+    """PID 24〜2B / 34〜3B の先頭 2 バイト: 当量比（λ）。"""
+    return round(_ab(d) * 2 / 65536, 3)
+
+
 def _o2_locations(d):
     """PID 13: 付いている O2 センサ（ビット 0-3 がバンク 1 のセンサ 1-4、4-7 がバンク 2）。"""
     found = [f"B{bit // 4 + 1}S{bit % 4 + 1}" for bit in range(8) if d[0] & (1 << bit)]
@@ -70,10 +75,16 @@ PIDS = {
         Pid(0x14, "O2 センサ B1S1", "V", 2, lambda d: round(d[0] / 200, 3)),
         Pid(0x15, "O2 センサ B1S2", "V", 2, lambda d: round(d[0] / 200, 3)),
         Pid(0x1F, "始動後経過時間", "秒", 2, _ab),
+        # 広帯域（A/F）センサ。電圧型 O2（PID 14）の代わりに付いている車が多い。1.0 = 理論空燃比、小さいほど濃い
+        Pid(0x24, "A/F センサ B1S1 当量比 (λ)", "", 4, _lambda),
         Pid(0x21, "MIL 点灯後の走行距離", "km", 2, _ab),
+        Pid(0x2C, "EGR 指令値", "%", 1, _pct),
+        Pid(0x2E, "パージ指令値", "%", 1, _pct),
         Pid(0x2F, "燃料残量", "%", 1, _pct),
+        Pid(0x30, "DTC 消去後の暖機回数", "回", 1, _a),
         Pid(0x31, "DTC 消去後の走行距離", "km", 2, _ab),
         Pid(0x33, "大気圧", "kPa", 1, _a),
+        Pid(0x34, "A/F センサ B1S1 当量比 (λ)", "", 4, _lambda),
         Pid(0x3C, "触媒温度 B1S1", "°C", 2, lambda d: round(_ab(d) / 10 - 40, 1)),
         Pid(0x42, "ECU 電圧", "V", 2, lambda d: round(_ab(d) / 1000, 2)),
         Pid(0x43, "絶対負荷", "%", 2, lambda d: round(_ab(d) * 100 / 255, 1)),

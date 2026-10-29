@@ -123,7 +123,7 @@ def read_freeze_frame(elm):
 
 
 # エンジン稼働中に続けて読む項目（O2 センサの反転・触媒の働き・燃料補正のばらつきを見る）
-TREND_PIDS = [0x14, 0x15, 0x06, 0x0C]
+TREND_PIDS = [0x14, 0x34, 0x15, 0x06, 0x0C]  # 0x34 は A/F センサ（電圧型 O2 の代わりに付く車）
 O2_RICH_LEAN_THRESHOLD = 0.45  # V。これをまたいだら「反転」と数える
 
 
@@ -212,7 +212,7 @@ def full_scan(elm, trend_seconds=10.0):
 
 # ---- エンジン始動をはさんだ段階ごとの測定 ----
 
-WARMUP_PIDS = [0x05, 0x0C, 0x06, 0x07, 0x14, 0x15]
+WARMUP_PIDS = [0x05, 0x0C, 0x06, 0x07, 0x14, 0x34, 0x15]
 
 
 def read_rpm(elm):
@@ -321,7 +321,7 @@ def hold_rpm_guided(elm, supported, beep, target=2500, band=300, settle=3.0, dur
 
 # ---- 回転数を気にせず記録する（ハイブリッド・メンテナンスモードなど） ----
 
-FREE_PIDS = [0x0C, 0x05, 0x03, 0x06, 0x07, 0x14, 0x15, 0x04, 0x0D, 0x5B, 0x42]
+FREE_PIDS = [0x0C, 0x05, 0x03, 0x06, 0x07, 0x14, 0x34, 0x15, 0x04, 0x0D, 0x5B, 0x42]
 
 
 def is_hybrid(report):
@@ -389,6 +389,7 @@ def record_free(elm, supported, seconds=300.0, interval=2.0, on_sample=None, rec
             "rpm": span(running, "0C"),
             "front_o2": span(running, "14"),
             "front_o2_switches": sum(1 for a, b in zip(sides, sides[1:]) if a != b),
+            "front_af_lambda": span(running, "34"),
             "rear_o2": span(running, "15"),
             "short_trim": span(running, "06"),
             "long_trim": span(running, "07"),
