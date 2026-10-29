@@ -8,6 +8,8 @@ FILES = [
     "obd_scan.py",
     "run_scan.bat",
     "run_diag_last.bat",
+    "record_result.py",
+    "run_result.bat",
     "kline_init_test.py",
     "run_kline_test.bat",
     "obd_scanner/__init__.py",
@@ -18,6 +20,7 @@ FILES = [
     "obd_scanner/scan.py",
     "obd_scanner/console.py",
     "obd_scanner/ai_diag.py",
+    "obd_scanner/cases.py",
     # PC の Claude Code で作業を続けるための経緯・構想メモ
     "HANDOFF.md",
     "APP_SPEC.md",
@@ -51,6 +54,12 @@ README = """OBD スキャンツール
   ライブデータを見続けたいときは、このフォルダのアドレス欄に cmd と入れて Enter し、
     python obd_scan.py COM7 --live
   （CSV にも記録するなら --live --csv。Ctrl+C で終了）
+
+■ run_result.bat … 修理が終わったら、実際の原因を記録する（答え合わせ）
+  診断メモの一覧（新しい順）から番号を選び、実際の原因・作業・Claude の見立てが当たったか・決め手を入力。
+  scan_logs フォルダの cases.jsonl と診断メモの末尾に記録されます。
+  同じ車種（較正 ID が同じ）を次に診断するとき、この記録を Claude に参考として渡します。
+  お客様の名前・電話番号は入れないでください。
 
 ■ run_kline_test.bat … 繋がらない車で、接続設定を探す
   繋がった設定は working_init.json に保存され、run_scan.bat が自動で使います。

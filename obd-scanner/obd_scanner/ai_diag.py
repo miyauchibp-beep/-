@@ -46,17 +46,24 @@ OBD2 スキャンツールで読み取ったデータと、車両情報・症状
 - status.readiness_available が false の車は、ECU がレディネスを返さない（古い国内車でよくある）。
   「レディネスを確認してください」とは書かない。
 - 「O2 センサの装着位置」（PID 13）があれば、どのセンサが付いているかはそれで判断する。
+- 「この店の過去の答え合わせ」があるときは、同じ車種の ECU（較正 ID が同じ）か同じ車で、実際に修理して
+  わかった原因（cause）・作業（work）・そのときの見立ての当たり外れ（verdict）・決め手（note）。
+  同じ車種で実際にあった原因として候補の順位づけの参考にするが、今回のデータと合わないなら無理に当てはめない。
+  参考にしたときは、どの記録を参考にしたかを根拠に書く。
 - 故障コードがなく症状もないときは、データから読み取れる点（バッテリー電圧、レディネス未完了、DTC 消去後の経過など）を短く伝えるだけでよい。
 """
 
 
-def build_user_message(report, vehicle="", symptom=""):
+def build_user_message(report, vehicle="", symptom="", past_cases=None):
     """スキャン結果と、整備士が入力した車両情報・症状を 1 つのメッセージにする。"""
     parts = []
     if vehicle:
         parts.append(f"■ 車両情報\n{vehicle}")
     parts.append(f"■ 症状・お客様の申告\n{symptom or '（入力なし）'}")
     parts.append("■ OBD2 スキャン結果（JSON）\n" + json.dumps(report, ensure_ascii=False, indent=2))
+    if past_cases:
+        parts.append("■ この店の過去の答え合わせ（同じ較正 ID・車台番号、新しい順）\n"
+                     + json.dumps(past_cases, ensure_ascii=False, indent=2))
     return "\n\n".join(parts)
 
 
@@ -64,7 +71,7 @@ class AiDiagError(Exception):
     """Claude API を呼べなかったとき（API キー未設定・通信エラーなど）。"""
 
 
-def diagnose(report, vehicle="", symptom="", model=MODEL, on_text=None, client=None):
+def diagnose(report, vehicle="", symptom="", model=MODEL, on_text=None, client=None, past_cases=None):
     """Claude に診断させ、Markdown の本文を返す。on_text を渡すと、届いた文字から順に呼ぶ。"""
     try:
         import anthropic
@@ -81,7 +88,7 @@ def diagnose(report, vehicle="", symptom="", model=MODEL, on_text=None, client=N
             fallbacks="default",
             output_config={"effort": "high"},
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_user_message(report, vehicle, symptom)}],
+            messages=[{"role": "user", "content": build_user_message(report, vehicle, symptom, past_cases)}],
         ) as stream:
             for text in stream.text_stream:
                 if on_text:

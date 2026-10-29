@@ -556,7 +556,7 @@ class VehicleMemoryTest(unittest.TestCase):
                 os.makedirs("scan_logs")
                 report = {"calibration_id": "31205100", "note": "x"}
                 seen = []
-                fake_diag = lambda r, v, s, on_text: seen.append(v) or "ok"
+                fake_diag = lambda r, v, s, on_text, **kw: seen.append(v) or "ok"
                 answers = iter(["", "トヨタ アレックス NZE121", ""])
                 with mock.patch.object(obd_scan, "diagnose", fake_diag), \
                         mock.patch.object(obd_scan, "ask", lambda prompt: next(answers)):
@@ -584,7 +584,7 @@ class FromScanTest(unittest.TestCase):
                     with open(os.path.join("scan_logs", name), "w", encoding="utf-8") as f:
                         json.dump({"protocol": proto, "note": "x"}, f)
                 seen = []
-                with mock.patch.object(obd_scan, "diagnose", lambda r, v, s, on_text: seen.append(r) or "ok"):
+                with mock.patch.object(obd_scan, "diagnose", lambda r, v, s, on_text, **kw: seen.append(r) or "ok"):
                     self.assertEqual(obd_scan.main(["--from-scan"]), 0)
                 self.assertEqual(seen[0]["protocol"], "new")
             finally:
@@ -760,11 +760,91 @@ class KlineInitTestScript(unittest.TestCase):
         self.assertFalse({c[:2] for c in obd_requests} & {"04", "14", "2E", "3B", "31", "10", "11"})
 
 
+class CasesTest(unittest.TestCase):
+    """修理結果の記録（答え合わせ）と、次の診断への受け渡し。"""
+
+    def _setup_logs(self):
+        os.makedirs("scan_logs")
+        scan = {"calibration_id": "37805-5Z1-J760U", "vin": "JH1-1003971",
+                "dtcs": {"stored": [{"code": "P0300", "description": "x"}], "pending": [],
+                         "permanent": [{"code": "P0300", "description": "x"}]}}
+        with open(os.path.join("scan_logs", "scan_20261029_165618.json"), "w", encoding="utf-8") as f:
+            json.dump(scan, f)
+        with open(os.path.join("scan_logs", "diag_20261029_165618.md"), "w", encoding="utf-8") as f:
+            f.write("# 診断メモ\n\n- 車両: ホンダ Nワゴン JH1\n- 症状: エンジンがかからない\n\n本文\n")
+        return scan
+
+    def test_record_and_reuse(self):
+        import obd_scan
+        import record_result
+        from unittest import mock
+        from obd_scanner import cases
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                scan = self._setup_logs()
+                answers = iter(["", "プラグのかぶり", "プラグ 3 本交換", "5", "2", "プラグの臭い"])
+                with mock.patch.object(record_result, "ask", lambda prompt: next(answers)):
+                    self.assertEqual(record_result.main(), 0)
+                saved = cases.load_cases()
+                self.assertEqual(len(saved), 1)
+                self.assertEqual(saved[0]["cause"], "プラグのかぶり")
+                self.assertEqual(saved[0]["vehicle"], "ホンダ Nワゴン JH1")
+                self.assertEqual(saved[0]["calibration_id"], "37805-5Z1-J760U")
+                self.assertEqual(saved[0]["dtcs"], ["P0300"])
+                self.assertIn("候補に入っていた", saved[0]["verdict"])
+                with open(os.path.join("scan_logs", "diag_20261029_165618.md"), encoding="utf-8") as f:
+                    md = f.read()
+                self.assertIn("## 答え合わせ", md)
+                self.assertIn("実際の原因: プラグのかぶり", md)
+                self.assertTrue(cases.recent_diags()[0]["answered"])
+
+                # 同じ較正 ID の車を診断すると、過去の記録が Claude に渡る
+                got = {}
+                fake = lambda r, v, s, on_text, past_cases=None: got.update(past=past_cases) or "ok"
+                answers = iter(["", "", ""])
+                with mock.patch.object(obd_scan, "diagnose", fake), \
+                        mock.patch.object(obd_scan, "ask", lambda prompt: next(answers)):
+                    obd_scan.run_ai({"calibration_id": scan["calibration_id"]}, "20261030_090000")
+                self.assertEqual(got["past"][0]["cause"], "プラグのかぶり")
+                # 別の車には渡さない
+                self.assertEqual(cases.similar_cases({"calibration_id": "31205100"}), [])
+            finally:
+                os.chdir(cwd)
+
+    def test_past_cases_in_message(self):
+        from obd_scanner.ai_diag import build_user_message
+        msg = build_user_message({"x": 1}, "車", "症状", [{"cause": "プラグのかぶり"}])
+        self.assertIn("過去の答え合わせ", msg)
+        self.assertIn("プラグのかぶり", msg)
+        self.assertNotIn("過去の答え合わせ", build_user_message({"x": 1}))
+
+    def test_diag_memo_names_scan(self):
+        import obd_scan
+        from unittest import mock
+        from obd_scanner import cases
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("scan_logs")
+                answers = iter(["", "", ""])
+                with mock.patch.object(obd_scan, "diagnose", lambda *a, **kw: "ok"), \
+                        mock.patch.object(obd_scan, "ask", lambda prompt: next(answers)):
+                    obd_scan.run_ai({}, "20261030_100000", scan_name="scan_20261029_165618.json")
+                diag = cases.recent_diags()[0]
+                self.assertEqual(diag["scan"], "scan_20261029_165618.json")
+                self.assertFalse(diag["answered"])
+            finally:
+                os.chdir(cwd)
+
+
 class BatFileTest(unittest.TestCase):
     def test_bat_is_ascii_with_crlf(self):
         # LF 改行や日本語が入ると、cmd.exe がコマンドを読み違える
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        for name in ("run_kline_test.bat", "run_scan.bat", "run_diag_last.bat"):
+        for name in ("run_kline_test.bat", "run_scan.bat", "run_diag_last.bat", "run_result.bat"):
             with open(os.path.join(root, name), "rb") as f:
                 data = f.read()
             data.decode("ascii")

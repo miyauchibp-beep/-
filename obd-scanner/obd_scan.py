@@ -27,6 +27,7 @@ from datetime import datetime
 try:
     from obd_scanner import pids
     from obd_scanner.ai_diag import AiDiagError, diagnose
+    from obd_scanner.cases import similar_cases
     from obd_scanner.console import ask_port, remember_port, run_from_console
     from obd_scanner.elm327 import KNOWN_SETTINGS, Elm327, ObdError
     from obd_scanner.scan import (full_scan, hold_rpm_guided, measure_running, read_coolant, read_live,
@@ -212,7 +213,7 @@ def remember_vehicle(key, vehicle):
         pass
 
 
-def run_ai(report, stamp, report_path=None):
+def run_ai(report, stamp, report_path=None, scan_name=None):
     """車両情報・症状を聞いて Claude に診断させ、Markdown で保存する。"""
     print("\n" + "=" * 50)
     if ask("Claude に診断させますか？ [Enter = はい / n = いいえ]: ").lower() in ("n", "no", "いいえ"):
@@ -225,9 +226,13 @@ def run_ai(report, stamp, report_path=None):
         vehicle = ask("車両（例: トヨタ bB QNC21 H28年 85000km）: ")
     remember_vehicle(key, vehicle)
     symptom = ask("症状・お客様の申告（例: アイドリングが不安定、警告灯が点いた）: ")
+    past = similar_cases(report)
+    if past:
+        print(f"\n同じ車種の答え合わせが {len(past)} 件あるので、参考として Claude に渡します。")
     print("\nClaude が診断しています...\n")
     try:
-        text = diagnose(report, vehicle, symptom, on_text=lambda t: print(t, end="", flush=True))
+        text = diagnose(report, vehicle, symptom, on_text=lambda t: print(t, end="", flush=True),
+                        past_cases=past)
     except AiDiagError as e:
         print(f"診断できませんでした: {e}")
         return
@@ -235,13 +240,19 @@ def run_ai(report, stamp, report_path=None):
     md_path = os.path.join("scan_logs", f"diag_{stamp}.md")
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(f"# 診断メモ {datetime.now():%Y-%m-%d %H:%M}\n\n")
-        f.write(f"- 車両: {vehicle or '（未入力）'}\n- 症状: {symptom or '（未入力）'}\n\n")
-        f.write(text + "\n\n---\nClaude による候補です。最終判断は実車で確認してください。\n")
+        f.write(f"- 車両: {vehicle or '（未入力）'}\n- 症状: {symptom or '（未入力）'}\n")
+        scan_name = scan_name or (os.path.basename(report_path) if report_path else "")
+        if scan_name:
+            f.write(f"- 読み取り結果: {scan_name}\n")
+        f.write("\n")
+        f.write(text + "\n\n---\nClaude による候補です。最終判断は実車で確認してください。\n"
+                "修理が終わったら run_result.bat で実際の原因を記録してください（答え合わせ）。\n")
     if report_path:
         report["ai_diagnosis"] = {"vehicle": vehicle, "symptom": symptom, "text": text}
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"\n診断メモを保存しました: {md_path}")
+    print("修理が終わったら run_result.bat で実際の原因を記録してください（答え合わせ）。")
 
 
 
@@ -521,7 +532,7 @@ def main(argv=None):
             report = json.load(f)
         report.pop("ai_diagnosis", None)
         print_report(report)
-        run_ai(report, stamp)
+        run_ai(report, stamp, scan_name=os.path.basename(args.from_scan))
         return 0
 
     demo_fake = None
