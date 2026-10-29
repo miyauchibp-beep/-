@@ -10,7 +10,7 @@ import re
 
 class FakeElm327:
     def __init__(self, vehicle_protocol="4", needs_kw0=True, dtcs=("P0301", "P0420"),
-                 init_address="33", generic_obd=True, init_baud="10"):
+                 init_address="33", generic_obd=True, init_baud="10", hybrid=False):
         """init_address: ECU が返事をする初期化アドレス（国内独自の車は 33 以外）
         generic_obd: False なら共通規格（01/03）に答えず、KWP の 1A/21 だけ答える"""
         self.vehicle_protocol = vehicle_protocol
@@ -18,6 +18,7 @@ class FakeElm327:
         self.init_address = init_address
         self.init_baud = init_baud  # トヨタの古い K-line は 96（9600bps）
         self.generic_obd = generic_obd
+        self.hybrid = hybrid     # True なら燃料の種類（PID 51）とハイブリッドバッテリー残量（PID 5B）に答える
         self.dtcs = list(dtcs)
         self.engine_running = True
         self.rpm = 800           # エンジン稼働中の回転数
@@ -128,7 +129,10 @@ class FakeElm327:
             "0104": "41 04 40",
             "0111": "41 11 26",
             "010F": "41 0F 3C",
-            "0120": "41 20 00 00 00 00",
+            "0120": "41 20 00 00 00 01" if self.hybrid else "41 20 00 00 00 00",
+            "0140": "41 40 00 00 80 20" if self.hybrid else "NO DATA",
+            "0151": "41 51 11" if self.hybrid else "NO DATA",
+            "015B": "41 5B B3" if self.hybrid else "NO DATA",
             "07": "47 00" if self._is_can else "47 00 00 00 00 00 00",
             "0A": "4A 00" if self._is_can else "4A 00 00 00 00 00 00",
             "0902": "014\r0: 49 02 01 4A 54 44\r1: 4B 42 32 30 55 30 30\r2: 31 32 33 34 35 36 37",

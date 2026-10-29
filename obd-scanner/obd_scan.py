@@ -30,8 +30,9 @@ try:
     from obd_scanner.cases import similar_cases
     from obd_scanner.console import ask_port, remember_port, run_from_console
     from obd_scanner.elm327 import KNOWN_SETTINGS, Elm327, ObdError
-    from obd_scanner.scan import (full_scan, hold_rpm_guided, measure_running, read_coolant, read_live,
-                                  read_rpm, record_cranking, supported_pids, warmup_sample)
+    from obd_scanner.scan import (full_scan, hold_rpm_guided, is_hybrid, measure_running, read_coolant,
+                                  read_live, read_rpm, record_cranking, record_free, supported_pids,
+                                  warmup_sample)
 except ImportError:
     print("obd_scanner フォルダが見つかりません。obd_scan.py と同じ場所にフォルダごとコピーしてください。")
     if os.name == "nt":
@@ -349,6 +350,50 @@ def ask_choice(prompt, choices, default):
         print(f"  {' / '.join(choices)} のどれかを入れてください")
 
 
+def ask_minutes(prompt, default):
+    """分数を聞く。Enter や対話できないときは default。"""
+    if not sys.stdin or not sys.stdin.isatty():
+        return default
+    while True:
+        ans = input(prompt).strip()
+        if not ans:
+            return default
+        try:
+            value = float(ans)
+        except ValueError:
+            value = 0
+        if 0 < value <= 60:
+            return value
+        print("  1〜60 の数字を入れてください")
+
+
+def run_free(elm, report, reconnect, demo_fake=None):
+    """回転数を気にせず、決めた時間だけ記録する（ハイブリッド・メンテナンスモードなど）。"""
+    supported = {int(p, 16) for p in report.get("supported_pids", [])}
+    print("\n" + "=" * 50)
+    print("回転数を気にせず記録します。ハイブリッドは READY（メンテナンスモードでも可）にしてください。")
+    print("アクセル操作は不要です。2 秒ごとに読み、決めた時間で自動で終わります（早く終えるときは Ctrl+C）。")
+    minutes = 1 if demo_fake else ask_minutes("何分記録しますか？（Enter で 5 分、暖機を見るなら 10〜15 分）: ", 5)
+    fmt = lambda v, w=5: f"{v if v is not None else '-':>{w}}"
+    show = lambda r: print(f"   {r['t']:>6.1f} 秒  回転 {fmt(r.get('0C'))} rpm  水温 {fmt(r.get('05'), 3)} °C  "
+                           f"O2 前 {fmt(r.get('14'))} 後 {fmt(r.get('15'))} V  "
+                           f"補正 {fmt(r.get('06'))} %  電圧 {fmt(r.get('voltage'), 4)} V"
+                           + (f"  HV残量 {r['5B']} %" if "5B" in r else ""), flush=True)
+    free = record_free(elm, supported, seconds=minutes * 60, interval=0 if demo_fake else 2.0,
+                       on_sample=show, reconnect=reconnect, max_samples=5 if demo_fake else None)
+    run = free["while_running"]
+    print(f"\n■ 記録: {free['seconds']} 秒、エンジンがかかっていた割合 "
+          f"{int((free['engine_running_ratio'] or 0) * 100)} %、閉ループ {'あり' if free['closed_loop_seen'] else 'なし'}")
+    if free["coolant"]:
+        print(f"   水温 {free['coolant']['first']} → {free['coolant']['last']} °C")
+    if run["front_o2"]:
+        print(f"   エンジン稼働中のフロント O2 {run['front_o2']['min']}〜{run['front_o2']['max']} V"
+              f"（反転 {run['front_o2_switches']} 回）")
+    if run["rear_o2"]:
+        print(f"   エンジン稼働中のリア O2 {run['rear_o2']['min']}〜{run['rear_o2']['max']} V")
+    return free
+
+
 def run_cranking(elm, report, reconnect, demo_fake=None):
     """エンジンがかからない車: セルを回している間の電圧・回転数・吸気管圧力を記録する。"""
     supported = {int(p, 16) for p in report.get("supported_pids", [])}
@@ -584,13 +629,19 @@ def main(argv=None):
         report = full_scan(elm, trend_seconds=args.trend)
         report["scanned_at"] = datetime.now().isoformat(timespec="seconds")
         print_report(report)
-        if report.get("generic_obd") and not report.get("engine_running") and not args.single:
+        hybrid = is_hybrid(report)
+        if hybrid:
+            print("\nハイブリッド車のようです。READY でエンジンが止まっていても正常です。"
+                  "回転数を気にしない記録（4）がおすすめです。")
+        if report.get("generic_obd") and (hybrid or not report.get("engine_running")) and not args.single:
+            default = "4" if hybrid else "1"
             choice = "1" if demo_fake else ask_choice(
                 "\n次はどうしますか？\n"
                 "  1 = エンジンをかけて、アイドリングなども測る\n"
                 "  2 = エンジンがかからない（セルを回している間を記録する）\n"
                 "  3 = ここで終わる\n"
-                "番号を入れて Enter（何も入れなければ 1）: ", ("1", "2", "3"), "1")
+                "  4 = 回転数を気にせず記録する（ハイブリッド・メンテナンスモード・アイドリングの様子見）\n"
+                f"番号を入れて Enter（何も入れなければ {default}）: ", ("1", "2", "3", "4"), default)
             reconnect = lambda: elm.connect(protocol=protocol, extra_init=extra, reset=reset)
             if choice == "1":
                 stages = run_stages(elm, report, reconnect, demo_fake=demo_fake)
@@ -600,6 +651,8 @@ def main(argv=None):
                 crank = run_cranking(elm, report, reconnect)
                 if crank:
                     report["stages"] = {"cranking": crank}
+            elif choice == "4":
+                report["stages"] = {"free_log": run_free(elm, report, reconnect)}
     finally:
         elm.close()
         raw_file.close()

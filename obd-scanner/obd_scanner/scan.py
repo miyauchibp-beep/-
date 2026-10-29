@@ -319,6 +319,85 @@ def hold_rpm_guided(elm, supported, beep, target=2500, band=300, settle=3.0, dur
     }
 
 
+# ---- 回転数を気にせず記録する（ハイブリッド・メンテナンスモードなど） ----
+
+FREE_PIDS = [0x0C, 0x05, 0x03, 0x06, 0x07, 0x14, 0x15, 0x04, 0x0D, 0x5B, 0x42]
+
+
+def is_hybrid(report):
+    """燃料の種類（PID 51）か、ハイブリッドバッテリー残量（PID 5B）の対応から判定する。"""
+    if "5B" in (report.get("supported_pids") or []):
+        return True
+    return any(v["pid"] == "51" and v["value"] in pids.HYBRID_FUEL_TYPES for v in report.get("live") or [])
+
+
+def record_free(elm, supported, seconds=300.0, interval=2.0, on_sample=None, reconnect=None, max_samples=None):
+    """回転数の目標なしで、決めた時間だけ一定間隔で記録する（Ctrl+C で早めに終われる）。
+    通信が切れたサンプルは error として残し、reconnect があれば繋ぎ直して続ける。
+
+    ハイブリッドは READY でもエンジンが止まったり、メンテナンスモードでも回転が固定だったりするので、
+    回転数で区切らず、エンジンがかかっていた間の O2・燃料補正・水温の動きをまとめる。
+    """
+    pid_list = [p for p in FREE_PIDS if p in supported]
+    samples = []
+    start = time.monotonic()
+    interrupted = False
+    try:
+        while time.monotonic() - start < seconds and (max_samples is None or len(samples) < max_samples):
+            t = time.monotonic()
+            row = {"t": round(t - start, 1)}
+            try:
+                row["voltage"] = elm.battery_voltage()
+                for v in read_live(elm, pid_list):
+                    row[v["pid"]] = v["value"]
+            except ObdError:
+                # 通信が切れても、それまでの記録は残して続ける
+                row["error"] = True
+                if reconnect:
+                    try:
+                        reconnect()
+                    except ObdError:
+                        pass
+            samples.append(row)
+            if on_sample:
+                on_sample(row)
+            time.sleep(max(0.0, interval - (time.monotonic() - t)))
+    except KeyboardInterrupt:
+        interrupted = True
+    running = [s for s in samples if (s.get("0C") or 0) > 0]
+
+    def span(rows, key):
+        vals = [r[key] for r in rows if isinstance(r.get(key), (int, float))]
+        if not vals:
+            return None
+        return {"min": min(vals), "max": max(vals), "avg": round(sum(vals) / len(vals), 3),
+                "first": vals[0], "last": vals[-1]}
+
+    front = [r["14"] for r in running if "14" in r]
+    sides = [v > O2_RICH_LEAN_THRESHOLD for v in front]
+    return {
+        "measured_at": datetime.now().isoformat(timespec="seconds"),
+        "seconds": samples[-1]["t"] if samples else 0,
+        "interval_sec": interval,
+        "stopped_early": interrupted,
+        "engine_running_ratio": round(len(running) / len(samples), 2) if samples else None,
+        "closed_loop_seen": any(str(r.get("03", "")).startswith("閉ループ") for r in samples),
+        "coolant": span(samples, "05"),
+        "voltage": span(samples, "voltage"),
+        "hybrid_battery": span(samples, "5B"),
+        "while_running": {
+            "rpm": span(running, "0C"),
+            "front_o2": span(running, "14"),
+            "front_o2_switches": sum(1 for a, b in zip(sides, sides[1:]) if a != b),
+            "rear_o2": span(running, "15"),
+            "short_trim": span(running, "06"),
+            "long_trim": span(running, "07"),
+        },
+        "samples": samples,
+        "pending_dtcs": read_pending(elm),
+    }
+
+
 # ---- エンジンがかからない車: クランキング中の記録 ----
 
 def record_cranking(elm, supported, wait_timeout=60.0, max_seconds=20.0, poll=0.0, on_sample=None):

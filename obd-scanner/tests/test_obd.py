@@ -840,6 +840,85 @@ class CasesTest(unittest.TestCase):
                 os.chdir(cwd)
 
 
+class HybridFreeLogTest(unittest.TestCase):
+    """ハイブリッドの判定と、回転数を気にしない記録。"""
+
+    def _elm(self, **kw):
+        from obd_scanner.simulator import FakeElm327
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False, dtcs=(), **kw)
+        elm = Elm327(fake)
+        elm.connect()
+        return fake, elm
+
+    def test_hybrid_detected_from_full_scan(self):
+        from obd_scanner.scan import full_scan, is_hybrid
+        fake, elm = self._elm(hybrid=True)
+        fake.engine_running = False
+        report = full_scan(elm, trend_seconds=0)
+        self.assertIn("5B", report["supported_pids"])
+        live = {v["pid"]: v["value"] for v in report["live"]}
+        self.assertEqual(live["51"], "ハイブリッド（ガソリン）")
+        self.assertEqual(live["5B"], 70.2)
+        self.assertTrue(is_hybrid(report))
+        fake2, elm2 = self._elm()
+        self.assertFalse(is_hybrid(full_scan(elm2, trend_seconds=0)))
+
+    def test_free_log_summarizes_running_part(self):
+        from obd_scanner.scan import record_free
+        fake, elm = self._elm(hybrid=True)
+        fake.engine_running = False
+        calls = []
+
+        def on_sample(row):
+            calls.append(row)
+            if len(calls) == 3:
+                fake.engine_running = True  # 途中でエンジンがかかる（ハイブリッドの暖機など）
+            if len(calls) == 8:
+                raise KeyboardInterrupt
+
+        supported = {0x0C, 0x05, 0x03, 0x06, 0x07, 0x14, 0x15, 0x5B}
+        free = record_free(elm, supported, seconds=60, interval=0, on_sample=on_sample)
+        self.assertTrue(free["stopped_early"])
+        self.assertEqual(len(free["samples"]), 8)
+        self.assertEqual(free["engine_running_ratio"], 0.62)
+        self.assertEqual(free["while_running"]["rpm"]["max"], 800)
+        self.assertIsNotNone(free["while_running"]["front_o2"])
+        self.assertEqual(free["hybrid_battery"]["max"], 70.2)
+        self.assertEqual(free["voltage"]["min"], 12.4)
+
+    def test_free_log_keeps_going_after_dropout(self):
+        from obd_scanner.scan import record_free
+        from unittest import mock
+        fake, elm = self._elm()
+        n = {"i": 0}
+        orig = elm.battery_voltage
+
+        def flaky():
+            n["i"] += 1
+            if n["i"] == 2:
+                raise ObdError("CAN ERROR")
+            return orig()
+        reconnects = []
+        with mock.patch.object(elm, "battery_voltage", flaky):
+            free = record_free(elm, {0x0C}, seconds=0.05, interval=0.01,
+                               reconnect=lambda: reconnects.append(1))
+        self.assertTrue(free["samples"][1].get("error"))
+        self.assertGreater(len(free["samples"]), 2)
+        self.assertEqual(reconnects, [1])
+
+    def test_run_free_demo(self):
+        import obd_scan
+        fake, elm = self._elm(hybrid=True)
+        report = {"supported_pids": ["0C", "05", "14", "15", "5B"]}
+        free = obd_scan.run_free(elm, report, lambda: None, demo_fake=fake)
+        self.assertGreater(len(free["samples"]), 0)
+
+    def test_prompt_mentions_free_log_and_hybrid(self):
+        from obd_scanner.ai_diag import SYSTEM_PROMPT
+        self.assertIn("free_log", SYSTEM_PROMPT)
+        self.assertIn("READY", SYSTEM_PROMPT)
+
+
 class BatFileTest(unittest.TestCase):
     def test_bat_is_ascii_with_crlf(self):
         # LF 改行や日本語が入ると、cmd.exe がコマンドを読み違える
