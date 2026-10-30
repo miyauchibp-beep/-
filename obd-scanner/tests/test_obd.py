@@ -7,6 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")  # run_ai が API の経路を通るように
 import kline_init_test
 from obd_scanner import dtc, pids
 from obd_scanner.elm327 import Elm327, ObdError, parse_response
@@ -194,7 +195,7 @@ class ScanTest(unittest.TestCase):
         elm.connect()
         full_scan(elm)
         modes = {c[:2] for c in fake.sent if not c.startswith("AT")}
-        self.assertTrue(modes <= {"01", "02", "03", "07", "09", "0A"}, modes)
+        self.assertTrue(modes <= {"01", "02", "03", "06", "07", "09", "0A"}, modes)
 
 
 class _FakeStream:
@@ -1022,6 +1023,138 @@ class HybridFreeLogTest(unittest.TestCase):
         from obd_scanner.ai_diag import SYSTEM_PROMPT
         self.assertIn("free_log", SYSTEM_PROMPT)
         self.assertIn("READY", SYSTEM_PROMPT)
+
+
+class PrototypeIdeasTest(unittest.TestCase):
+    """スマホで作った試作版から取り入れた機能（モード 06・自動チェック・症状マーク・チャット用の文・CSV）。"""
+
+    def test_mode06_read_on_can(self):
+        from obd_scanner.scan import full_scan
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        elm = Elm327(fake)
+        elm.connect()
+        r = full_scan(elm, trend_seconds=0)
+        m6 = {x["mid"]: x for x in r["mode06"]}
+        self.assertTrue(m6["01"]["passed"])
+        self.assertEqual((m6["21"]["value"], m6["21"]["min"], m6["21"]["max"]), (5, 10, 100))
+        self.assertFalse(m6["21"]["passed"])
+        self.assertEqual(m6["21"]["name"], "触媒 B1")
+
+    def test_mode06_skipped_on_kline(self):
+        from obd_scanner.scan import read_mode06
+        fake = FakeElm327()
+        elm = Elm327(fake)
+        elm.connect(protocol="4", extra_init=["ATKW0"])
+        self.assertIsNone(read_mode06(elm))
+        self.assertFalse(any(c.startswith("06") for c in fake.sent))
+
+    def test_auto_checks_vacuum_leak_pattern(self):
+        from obd_scanner.checks import auto_checks
+        trend = lambda pid, vals: {"pid": pid, "count": len(vals), "min": min(vals), "max": max(vals),
+                                   "avg": sum(vals) / len(vals)}
+        report = {
+            "battery_voltage": 11.9, "engine_running": False,
+            "mode06": [{"name": "触媒 B1", "tid": "80", "value": 5, "min": 10, "max": 100, "passed": False}],
+            "stages": {
+                "idle_warm": {"live": [{"pid": "07", "value": 12.0}, {"pid": "42", "value": 14.1}],
+                              "trend": {"items": [trend("06", [6.0] * 10), trend("0C", [600] * 5 + [850] * 5)]}},
+                "hold_2500rpm": {"trend": {"items": [trend("06", [-8.0] * 10)]}},
+            },
+        }
+        text = "\n".join(auto_checks(report))
+        self.assertIn("+18.0%", text)            # アイドルの補正合計
+        self.assertIn("エア吸い", text)          # 回転を上げると戻る
+        self.assertIn("アイドル回転の上下", text)
+        self.assertIn("バッテリー電圧が低め", text)
+        self.assertIn("モード 06 で不合格: 触媒 B1", text)
+        self.assertNotIn("稼働中の電圧", text)   # 14.1V は正常
+
+    def test_symptom_marks(self):
+        from obd_scanner.scan import record_free
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        elm = Elm327(fake)
+        elm.connect()
+        clock = {"t": 0.0}
+
+        def monotonic():
+            clock["t"] += 0.05
+            return clock["t"]
+        presses = {"n": 0}
+
+        def keys():
+            presses["n"] += 1
+            if presses["n"] == 200:      # 約 10 秒後に症状が出る
+                fake.rpm = 450           # 回転が落ち込む
+                return [" "]
+            if presses["n"] == 330:
+                return ["q"]
+            return []
+        fake_time = types.SimpleNamespace(monotonic=monotonic, sleep=lambda s: None)
+        marks = []
+        from unittest import mock
+        with mock.patch("obd_scanner.scan.time", fake_time):
+            free = record_free(elm, {0x0C, 0x06}, seconds=600, interval=2.0, keys=keys, on_mark=marks.append)
+        self.assertTrue(free["stopped_early"])
+        self.assertEqual(len(free["marks"]), 1)
+        self.assertEqual(marks[0]["no"], 1)
+        rpm = next(c for c in free["marks"][0]["changes"] if c["pid"] == "0C")
+        self.assertEqual(rpm["before"], 800)
+        self.assertLess(rpm["during"], 650)
+        self.assertTrue(rpm["notable"])
+
+    def test_prompt_only_writes_chat_text(self):
+        import obd_scan
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("scan_logs")
+                answers = iter(["p", "日産 バネット", "点検"])
+                called = []
+                with mock.patch.object(obd_scan, "diagnose", lambda *a, **kw: called.append(1)), \
+                        mock.patch.object(obd_scan, "ask", lambda prompt: next(answers)):
+                    obd_scan.run_ai({"calibration_id": "X", "live": []}, "20261030_120000")
+                self.assertEqual(called, [])  # API は使わない
+                with open(os.path.join("scan_logs", "prompt_20261030_120000.txt"), encoding="utf-8") as f:
+                    text = f.read()
+                self.assertIn("お客様向けの説明", text)  # 指示文も入っている
+                self.assertIn("日産 バネット", text)
+                self.assertTrue(os.path.exists(os.path.join("scan_logs", "diag_20261030_120000.md")))
+            finally:
+                os.chdir(cwd)
+
+    def test_no_api_key_falls_back_to_prompt(self):
+        import obd_scan
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("scan_logs")
+                answers = iter(["", "", ""])
+                with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}), \
+                        mock.patch.object(obd_scan, "ask", lambda prompt: next(answers)):
+                    obd_scan.run_ai({}, "20261030_130000")
+                self.assertTrue(os.path.exists(os.path.join("scan_logs", "prompt_20261030_130000.txt")))
+            finally:
+                os.chdir(cwd)
+
+    def test_cases_csv_and_hit_rate(self):
+        from obd_scanner import cases
+        with tempfile.TemporaryDirectory() as tmp:
+            items = [{"verdict": cases.VERDICTS["1"], "vehicle": "A", "dtcs": ["P0420"], "recorded_at": "2026-10-30T10:00:00"},
+                     {"verdict": cases.VERDICTS["2"], "vehicle": "Nワゴン", "dtcs": []},
+                     {"verdict": cases.VERDICTS["3"], "vehicle": "C", "dtcs": []}]
+            self.assertEqual(cases.hit_rate(items), (3, 1, 2))
+            path = cases.write_csv(items, os.path.join(tmp, "cases.csv"))
+            with open(path, "rb") as f:
+                data = f.read()
+            self.assertTrue(data.startswith(b"\xef\xbb\xbf"))  # Excel で文字化けしない
+            text = data.decode("utf-8-sig")
+            self.assertIn("実際の原因", text)
+            self.assertIn("Nワゴン", text)
+            self.assertIn("2026-10-30,", text)
 
 
 class BatFileTest(unittest.TestCase):

@@ -13,7 +13,8 @@ import os
 import sys
 
 try:
-    from obd_scanner.cases import VERDICTS, make_case, recent_diags, save_case, scan_for
+    from obd_scanner.cases import (VERDICTS, hit_rate, make_case, recent_diags, save_case, scan_for,
+                                   write_csv)
     from obd_scanner.console import run_from_console
 except ImportError:
     print("obd_scanner フォルダが見つかりません。record_result.py と同じ場所にフォルダごとコピーしてください。")
@@ -26,7 +27,15 @@ def ask(prompt):
     return input(prompt).strip()
 
 
+def print_hit_rate():
+    n, top1, listed = hit_rate()
+    if n:
+        print(f"これまでの答え合わせ {n} 件: 1 位で当たり {top1} 件（{top1 * 100 // n}%）、"
+              f"候補に入っていた {listed} 件（{listed * 100 // n}%）\n")
+
+
 def main():
+    print_hit_rate()
     diags = recent_diags()
     if not diags:
         print("scan_logs フォルダに診断メモ（diag_日時.md）がありません。先に run_scan.bat で診断してください。")
@@ -60,7 +69,9 @@ def main():
 
     case = make_case(diag, scan_for(diag), cause, work, verdict, note)
     save_case(case, md_path=diag["path"])
+    write_csv()
     print(f"\n記録しました: scan_logs\\cases.jsonl と {os.path.basename(diag['path'])}")
+    print("一覧（Excel で開けます）: scan_logs\\cases.csv")
     if case["calibration_id"]:
         print(f"同じ較正 ID（{case['calibration_id']}）の車を診断するとき、Claude に参考として渡します。")
     else:

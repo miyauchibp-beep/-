@@ -221,9 +221,70 @@ def full_scan(elm, trend_seconds=10.0):
     live_pids = [p for p in pids.PIDS if p in supported]
     report["live"] = read_live(elm, live_pids)
     report["engine_running"] = engine_running(report["live"])
+    report["mode06"] = read_mode06(elm)
     if report["engine_running"] and trend_seconds > 0:
         report["trend"] = sample_trend(elm, supported, trend_seconds)
     return report
+
+
+# ---- モード 06: ECU が自分で行った検査（O2 センサ・触媒・失火など）の結果 ----
+
+# よく出る MID（検査の対象）の名前。SAE J1979 の表から
+MODE06_NAMES = {
+    0x01: "O2 センサ B1S1", 0x02: "O2 センサ B1S2", 0x03: "O2 センサ B1S3",
+    0x05: "O2 センサ B2S1", 0x06: "O2 センサ B2S2",
+    0x21: "触媒 B1", 0x22: "触媒 B2",
+    0x31: "EGR", 0x35: "VVT B1", 0x36: "VVT B2",
+    0x39: "EVAP（0.150 インチ）", 0x3A: "EVAP（0.090 インチ）", 0x3B: "EVAP（0.040 インチ）", 0x3C: "EVAP（0.020 インチ）",
+    0x41: "O2 センサヒータ B1S1", 0x42: "O2 センサヒータ B1S2", 0x45: "O2 センサヒータ B2S1",
+    0x61: "二次空気", 0x81: "燃料系 B1", 0x82: "燃料系 B2",
+    0xA1: "失火（全体）", **{0xA1 + n: f"失火 {n} 番気筒" for n in range(1, 13)},
+}
+
+
+def read_mode06(elm, max_mids=40):
+    """モード 06 の検査結果を読む（CAN の車だけ）。読めなければ None。
+
+    1 件 = MID・TID（検査の番号）・UASID（単位の種類）・測定値・下限・上限。
+    単位の換算はしないが、下限〜上限に入っているか（passed）は単位によらず判定できる。
+    """
+    if not elm.is_can:
+        return None  # K-line などは形式が違う（古い方式）ので読まない
+    mids = []
+    base = 0x00
+    while base <= 0xE0:
+        try:
+            bodies = elm.query(0x06, base)
+        except ObdError:
+            break
+        if not bodies:
+            break
+        found = sorted({m for body in bodies for m in pids.supported_from_bitmap(base, body)})
+        mids.extend(m for m in found if m % 0x20)
+        if base + 0x20 not in found:
+            break
+        base += 0x20
+    if not mids:
+        return None
+    results = []
+    for mid in mids[:max_mids]:
+        try:
+            bodies = elm.query(0x06, mid)
+        except ObdError:
+            continue
+        for body in bodies:
+            data = [mid] + body
+            for i in range(0, len(data) - 8, 9):
+                rec = data[i:i + 9]
+                if rec[0] != mid:
+                    break
+                value, low, high = (rec[3] << 8 | rec[4]), (rec[5] << 8 | rec[6]), (rec[7] << 8 | rec[8])
+                results.append({
+                    "mid": f"{mid:02X}", "name": MODE06_NAMES.get(mid, f"MID {mid:02X}"),
+                    "tid": f"{rec[1]:02X}", "uasid": f"{rec[2]:02X}",
+                    "value": value, "min": low, "max": high, "passed": low <= value <= high,
+                })
+    return results or None
 
 
 # ---- エンジン始動をはさんだ段階ごとの測定 ----
@@ -348,15 +409,42 @@ def is_hybrid(report):
     return any(v["pid"] == "51" and v["value"] in pids.HYBRID_FUEL_TYPES for v in report.get("live") or [])
 
 
-def record_free(elm, supported, seconds=300.0, interval=2.0, on_sample=None, reconnect=None, max_samples=None):
+# 症状マークの前後で比べる項目と、「大きく変わった」とみなす差
+MARK_PIDS = {"0C": ("エンジン回転数", 150), "0D": ("車速", 5), "04": ("エンジン負荷", 15),
+             "06": ("短期燃料補正", 5), "07": ("長期燃料補正", 5), "14": ("O2 センサ B1S1", 0.3),
+             "34": ("A/F センサ λ", 0.05), "15": ("O2 センサ B1S2", 0.3), "voltage": ("電圧", 0.5),
+             "05": ("冷却水温", 5)}
+
+
+def _mark_changes(samples, t):
+    """マークの直前（-10〜-2 秒）と発生時（-2〜+4 秒）の平均を比べる。"""
+    before = [s for s in samples if t - 10 <= s["t"] < t - 2]
+    during = [s for s in samples if t - 2 <= s["t"] <= t + 4]
+    changes = []
+    for key, (name, notable) in MARK_PIDS.items():
+        b = [s[key] for s in before if isinstance(s.get(key), (int, float))]
+        d = [s[key] for s in during if isinstance(s.get(key), (int, float))]
+        if not b or not d:
+            continue
+        avg_b, avg_d = round(sum(b) / len(b), 3), round(sum(d) / len(d), 3)
+        changes.append({"pid": key, "name": name, "before": avg_b, "during": avg_d,
+                        "during_min": min(d), "during_max": max(d),
+                        "notable": abs(avg_d - avg_b) >= notable})
+    return changes
+
+
+def record_free(elm, supported, seconds=300.0, interval=2.0, on_sample=None, reconnect=None, max_samples=None,
+                keys=None, on_mark=None):
     """回転数の目標なしで、決めた時間だけ一定間隔で記録する（Ctrl+C で早めに終われる）。
     通信が切れたサンプルは error として残し、reconnect があれば繋ぎ直して続ける。
+    keys を渡すと、待ち時間の間に呼び、押されたキーの一覧（" " = 症状マーク、"q" = 終了）を受け取る。
 
     ハイブリッドは READY でもエンジンが止まったり、メンテナンスモードでも回転が固定だったりするので、
     回転数で区切らず、エンジンがかかっていた間の O2・燃料補正・水温の動きをまとめる。
     """
     pid_list = [p for p in FREE_PIDS if p in supported]
     samples = []
+    marks = []
     start = time.monotonic()
     interrupted = False
     try:
@@ -378,7 +466,9 @@ def record_free(elm, supported, seconds=300.0, interval=2.0, on_sample=None, rec
             samples.append(row)
             if on_sample:
                 on_sample(row)
-            time.sleep(max(0.0, interval - (time.monotonic() - t)))
+            if _wait_keys(keys, t + interval, start, marks, on_mark):
+                interrupted = True
+                break
     except KeyboardInterrupt:
         interrupted = True
     running = [s for s in samples if (s.get("0C") or 0) > 0]
@@ -411,9 +501,26 @@ def record_free(elm, supported, seconds=300.0, interval=2.0, on_sample=None, rec
             "short_trim": span(running, "06"),
             "long_trim": span(running, "07"),
         },
+        "marks": [dict(m, changes=_mark_changes(samples, m["t"])) for m in marks],
         "samples": samples,
         "pending_dtcs": read_pending(elm),
     }
+
+
+def _wait_keys(keys, until, start, marks, on_mark):
+    """次の読み取りまで待つ。その間に押されたキーを見る。"q" なら True。"""
+    while True:
+        for key in (keys() if keys else []):
+            if key == "q":
+                return True
+            mark = {"no": len(marks) + 1, "t": round(time.monotonic() - start, 1)}
+            marks.append(mark)
+            if on_mark:
+                on_mark(mark)
+        left = until - time.monotonic()
+        if left <= 0:
+            return False
+        time.sleep(min(0.1, left) if keys else left)
 
 
 # ---- エンジンがかからない車: クランキング中の記録 ----

@@ -26,7 +26,8 @@ from datetime import datetime
 
 try:
     from obd_scanner import pids
-    from obd_scanner.ai_diag import AiDiagError, diagnose
+    from obd_scanner.ai_diag import SYSTEM_PROMPT, AiDiagError, build_user_message, diagnose
+    from obd_scanner.checks import auto_checks
     from obd_scanner.cases import similar_cases
     from obd_scanner.console import ask_port, remember_port, run_from_console
     from obd_scanner.elm327 import KNOWN_SETTINGS, Elm327, ObdError
@@ -128,6 +129,13 @@ def print_report(r):
     for v in r["live"]:
         print(f"   {v['name']:<16} {v['value']} {v['unit']}")
 
+    m6 = r.get("mode06")
+    if m6:
+        failed = [x for x in m6 if not x["passed"]]
+        print(f"\n■ モード 06（ECU の自己検査）: {len(m6)} 件、不合格 {len(failed)} 件")
+        for x in failed:
+            print(f"   × {x['name']}（TID {x['tid']}）値 {x['value']}、範囲 {x['min']}〜{x['max']}")
+
     t = r.get("trend")
     if t:
         print(f"\n■ {t['seconds']} 秒間の動き")
@@ -214,11 +222,20 @@ def remember_vehicle(key, vehicle):
         pass
 
 
-def run_ai(report, stamp, report_path=None, scan_name=None):
-    """車両情報・症状を聞いて Claude に診断させ、Markdown で保存する。"""
+def run_ai(report, stamp, report_path=None, scan_name=None, prompt_only=False):
+    """車両情報・症状を聞いて Claude に診断させ、Markdown で保存する。
+
+    prompt_only なら API を使わず、チャットに貼る文（prompt_日時.txt）だけ作る（API 代なし）。
+    """
     print("\n" + "=" * 50)
-    if ask("Claude に診断させますか？ [Enter = はい / n = いいえ]: ").lower() in ("n", "no", "いいえ"):
-        return
+    if not prompt_only:
+        ans = ask("Claude に診断させますか？ [Enter = はい / p = チャットに貼る文を作る（API 代なし） / n = いいえ]: ")
+        if ans.lower() in ("n", "no", "いいえ"):
+            return
+        prompt_only = ans.lower() == "p"
+        if not prompt_only and not os.environ.get("ANTHROPIC_API_KEY"):
+            print("API キー（ANTHROPIC_API_KEY）が設定されていないので、チャットに貼る文を作ります。")
+            prompt_only = True
     key = report.get("calibration_id") or report.get("vin")
     known = load_vehicles().get(key, "") if key else ""
     if known:
@@ -230,6 +247,22 @@ def run_ai(report, stamp, report_path=None, scan_name=None):
     past = similar_cases(report)
     if past:
         print(f"\n同じ車種の答え合わせが {len(past)} 件あるので、参考として Claude に渡します。")
+    scan_name = scan_name or (os.path.basename(report_path) if report_path else "")
+    md_path = os.path.join("scan_logs", f"diag_{stamp}.md")
+    header = (f"# 診断メモ {datetime.now():%Y-%m-%d %H:%M}\n\n"
+              f"- 車両: {vehicle or '（未入力）'}\n- 症状: {symptom or '（未入力）'}\n"
+              + (f"- 読み取り結果: {scan_name}\n" if scan_name else "") + "\n")
+    if prompt_only:
+        prompt_path = os.path.join("scan_logs", f"prompt_{stamp}.txt")
+        with open(prompt_path, "w", encoding="utf-8") as f:
+            f.write(SYSTEM_PROMPT + "\n\n---\n\n" + build_user_message(report, vehicle, symptom, past))
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(header + "（チャットで診断。Claude の答えをここに貼っておくと、答え合わせのときに見返せます）\n\n"
+                    "---\n修理が終わったら run_result.bat で実際の原因を記録してください（答え合わせ）。\n")
+        print(f"\nチャットに貼る文を作りました: {prompt_path}")
+        print("メモ帳で開いて全部コピーし（Ctrl+A → Ctrl+C）、claude.ai のチャットに貼ってください。")
+        print(f"診断メモ（答え合わせ用）: {md_path}")
+        return
     print("\nClaude が診断しています...\n")
     try:
         text = diagnose(report, vehicle, symptom, on_text=lambda t: print(t, end="", flush=True),
@@ -238,14 +271,8 @@ def run_ai(report, stamp, report_path=None, scan_name=None):
         print(f"診断できませんでした: {e}")
         return
     print()
-    md_path = os.path.join("scan_logs", f"diag_{stamp}.md")
     with open(md_path, "w", encoding="utf-8") as f:
-        f.write(f"# 診断メモ {datetime.now():%Y-%m-%d %H:%M}\n\n")
-        f.write(f"- 車両: {vehicle or '（未入力）'}\n- 症状: {symptom or '（未入力）'}\n")
-        scan_name = scan_name or (os.path.basename(report_path) if report_path else "")
-        if scan_name:
-            f.write(f"- 読み取り結果: {scan_name}\n")
-        f.write("\n")
+        f.write(header)
         f.write(text + "\n\n---\nClaude による候補です。最終判断は実車で確認してください。\n"
                 "修理が終わったら run_result.bat で実際の原因を記録してください（答え合わせ）。\n")
     if report_path:
@@ -372,7 +399,9 @@ def run_free(elm, report, reconnect, demo_fake=None):
     supported = {int(p, 16) for p in report.get("supported_pids", [])}
     print("\n" + "=" * 50)
     print("回転数を気にせず記録します。ハイブリッドは READY（メンテナンスモードでも可）にしてください。")
-    print("アクセル操作は不要です。2 秒ごとに読み、決めた時間で自動で終わります（早く終えるときは Ctrl+C）。")
+    print("アクセル操作は不要です。2 秒ごとに読み、決めた時間で自動で終わります。")
+    print("症状が出たら スペースキー（★ 印を付けます）、早く終えるときは q か Ctrl+C。")
+    print("走りながら記録するときは、助手席の人にキーを押してもらってください（運転中は操作しない）。")
     minutes = 1 if demo_fake else ask_minutes("何分記録しますか？（Enter で 5 分、暖機を見るなら 10〜15 分）: ", 5)
     fmt = lambda v, w=5: f"{v if v is not None else '-':>{w}}"
     show = lambda r: print(f"   {r['t']:>6.1f} 秒  回転 {fmt(r.get('0C'))} rpm  水温 {fmt(r.get('05'), 3)} °C  "
@@ -381,7 +410,9 @@ def run_free(elm, report, reconnect, demo_fake=None):
                            + (f"  A/F λ {r['34']}" if "34" in r else "")
                            + (f"  HV残量 {r['5B']} %" if "5B" in r else ""), flush=True)
     free = record_free(elm, supported, seconds=minutes * 60, interval=0 if demo_fake else 2.0,
-                       on_sample=show, reconnect=reconnect, max_samples=5 if demo_fake else None)
+                       on_sample=show, reconnect=reconnect, max_samples=5 if demo_fake else None,
+                       keys=None if demo_fake else read_keys,
+                       on_mark=lambda m: print(f"   ★ 症状マーク {m['no']}（{m['t']} 秒）", flush=True))
     run = free["while_running"]
     print(f"\n■ 記録: {free['seconds']} 秒、エンジンがかかっていた割合 "
           f"{int((free['engine_running_ratio'] or 0) * 100)} %、閉ループ {'あり' if free['closed_loop_seen'] else 'なし'}")
@@ -392,7 +423,25 @@ def run_free(elm, report, reconnect, demo_fake=None):
               f"（反転 {run['front_o2_switches']} 回）")
     if run["rear_o2"]:
         print(f"   エンジン稼働中のリア O2 {run['rear_o2']['min']}〜{run['rear_o2']['max']} V")
+    for m in free["marks"]:
+        big = [f"{c['name']} {c['before']}→{c['during']}" for c in m["changes"] if c["notable"]]
+        print(f"   ★ マーク {m['no']}（{m['t']} 秒）: " + ("、".join(big) if big else "前後で大きな変化なし"))
     return free
+
+
+def read_keys():
+    """押されたキー（" " = 症状マーク、"q" = 終了）。Windows のコンソールだけで使える。"""
+    if os.name != "nt":
+        return []
+    import msvcrt
+    keys = []
+    while msvcrt.kbhit():
+        ch = msvcrt.getwch()
+        if ch in (" ", "m", "M"):
+            keys.append(" ")
+        elif ch in ("q", "Q"):
+            keys.append("q")
+    return keys
 
 
 def run_cranking(elm, report, reconnect, demo_fake=None):
@@ -557,6 +606,8 @@ def main(argv=None):
                     help="--live で見る項目を絞る（例: 15 や 15,14,0C。o2 で O2 センサ 2 つと回転数）。少ないほど速く更新")
     ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
     ap.add_argument("--no-ai", action="store_true", help="Claude による診断をしない")
+    ap.add_argument("--prompt-only", action="store_true",
+                    help="API を使わず、claude.ai のチャットに貼る文（scan_logs/prompt_日時.txt）だけ作る")
     ap.add_argument("--single", action="store_true",
                     help="エンジン始動をはさんだ段階ごとの測定をせず、今の状態を 1 回だけ読む")
     ap.add_argument("--trend", type=float, default=10.0, metavar="秒",
@@ -580,7 +631,8 @@ def main(argv=None):
             report = json.load(f)
         report.pop("ai_diagnosis", None)
         print_report(report)
-        run_ai(report, stamp, scan_name=os.path.basename(args.from_scan))
+        report["auto_checks"] = auto_checks(report)
+        run_ai(report, stamp, scan_name=os.path.basename(args.from_scan), prompt_only=args.prompt_only)
         return 0
 
     demo_fake = None
@@ -660,13 +712,18 @@ def main(argv=None):
         elm.close()
         raw_file.close()
 
+    report["auto_checks"] = auto_checks(report)
+    if report["auto_checks"]:
+        print("\n■ 自動チェック（機械的な目安）")
+        for flag in report["auto_checks"]:
+            print(f"   ・{flag}")
     path = os.path.join("scan_logs", f"scan_{stamp}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"\n保存しました: {path}")
     print(f"通信の記録: {raw_path}")
     if not args.no_ai:
-        run_ai(report, stamp, report_path=path)
+        run_ai(report, stamp, report_path=path, prompt_only=args.prompt_only)
     return 0
 
 

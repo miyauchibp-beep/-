@@ -138,6 +138,11 @@ class FakeElm327:
             "015B": "41 5B B3" if self.hybrid else "NO DATA",
             "07": "47 00" if self._is_can else "47 00 00 00 00 00 00",
             "0A": "4A 00" if self._is_can else "4A 00 00 00 00 00 00",
+            # モード 06（CAN のみ）: MID 01（フロント O2）と 21（触媒 B1）。触媒は下限を下回って不合格
+            "0600": "46 00 80 00 00 01" if self._is_can else "NO DATA",
+            "0620": "46 20 80 00 00 00" if self._is_can else "NO DATA",
+            "0601": "46 01 01 0A 01 2C 00 64 03 E8" if self._is_can else "NO DATA",
+            "0621": "46 21 80 01 00 05 00 0A 00 64" if self._is_can else "NO DATA",
             "0902": "014\r0: 49 02 01 4A 54 44\r1: 4B 42 32 30 55 30 30\r2: 31 32 33 34 35 36 37",
             "0904": ("49 04 01 33 31 32 30\r49 04 02 35 31 30 30\r49 04 03 00 00 00 00\r49 04 04 00 00 00 00"
                      if not self._is_can else "013\r0: 49 04 01 34 35 34 31\r1: 30 32 30 30 00 00 00\r2: 00 00 00 00 00 00 00"),

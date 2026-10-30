@@ -131,3 +131,32 @@ def similar_cases(report, cases=None, limit=5):
             if (cal and c.get("calibration_id") == cal) or (vin and c.get("vin") == vin)]
     keep = ("vehicle", "symptom", "dtcs", "cause", "work", "verdict", "note", "recorded_at")
     return [{k: c.get(k) for k in keep if c.get(k)} for c in reversed(hits)][:limit]
+
+
+CSV_FILE = os.path.join(LOG_DIR, "cases.csv")
+CSV_COLUMNS = [("recorded_at", "記録日"), ("vehicle", "車両"), ("symptom", "症状"), ("dtcs", "故障コード"),
+               ("cause", "実際の原因"), ("work", "作業・交換部品"), ("verdict", "Claude の見立て"),
+               ("note", "決め手・メモ"), ("calibration_id", "較正 ID"), ("diag", "診断メモ")]
+
+
+def write_csv(cases=None, path=CSV_FILE):
+    """答え合わせの一覧を Excel で開ける CSV（BOM 付き UTF-8）にする。"""
+    import csv
+    cases = load_cases() if cases is None else cases
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow([label for _, label in CSV_COLUMNS])
+        for c in cases:
+            w.writerow([" ".join(c.get(k) or []) if k == "dtcs" else (c.get(k) or "")[:10] if k == "recorded_at"
+                        else c.get(k, "") for k, _ in CSV_COLUMNS])
+    return path
+
+
+def hit_rate(cases=None):
+    """(件数, 1 位で当たり, 候補に入っていた) を返す。"""
+    cases = load_cases() if cases is None else cases
+    judged = [c for c in cases if c.get("verdict") in VERDICTS.values()]
+    top1 = sum(1 for c in judged if c["verdict"] == VERDICTS["1"])
+    listed = sum(1 for c in judged if c["verdict"] in (VERDICTS["1"], VERDICTS["2"]))
+    return len(judged), top1, listed
