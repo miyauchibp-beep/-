@@ -77,6 +77,7 @@ def connect_any(elm, saved):
         if not saved or (protocol, list(extra)) != (saved[0], list(saved[1])):
             candidates.append((protocol, list(extra), "ATZ", label))
     last_error = None
+    fallback = None  # 繋がったが共通規格に答えなかった設定（ほかが全部だめなときだけ使う）
     for i, (protocol, extra, reset, label) in enumerate(candidates):
         if i and protocol in "345":
             time.sleep(3)  # K-line は失敗した直後の初期化を受け付けないことがある
@@ -87,7 +88,19 @@ def connect_any(elm, saved):
             print(f"だめでした（{e}）")
             last_error = e
             continue
+        if not elm.generic_obd:
+            # 2026-10-30: 初期化だけ成功する設定（キャリイ DA63T の宛先 01）が保存されていても、ほかを先に試す
+            print("繋がったが共通規格の質問に答えない。ほかの設定も試します")
+            fallback = fallback or (protocol, extra, reset, label)
+            continue
         print("OK")
+        return elm.protocol or protocol, extra, reset, label
+    if fallback:
+        protocol, extra, reset, label = fallback
+        time.sleep(3)
+        print(f"  {label} で接続し直します... ", end="", flush=True)
+        elm.connect(protocol=protocol, extra_init=extra, reset=reset)
+        print("OK（共通規格には答えない車です）")
         return elm.protocol or protocol, extra, reset, label
     raise last_error
 

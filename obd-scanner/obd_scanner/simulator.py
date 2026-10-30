@@ -11,7 +11,7 @@ import re
 class FakeElm327:
     def __init__(self, vehicle_protocol="4", needs_kw0=True, dtcs=("P0301", "P0420"),
                  init_address="33", generic_obd=True, init_baud="10", hybrid=False,
-                 second_ecu=False, physical_header_ok=True):
+                 second_ecu=False, physical_header_ok=True, silent=False):
         """init_address: ECU が返事をする初期化アドレス（国内独自の車は 33 以外）
         generic_obd: False なら共通規格（01/03）に答えず、KWP の 1A/21 だけ答える"""
         self.vehicle_protocol = vehicle_protocol
@@ -21,6 +21,8 @@ class FakeElm327:
         self.generic_obd = generic_obd
         # True ならミッション ECU も答える（CAN で全 ECU 宛てのとき。バネットの再現）
         self.second_ecu = second_ecu
+        # True なら初期化には応じるが、どの読み取り要求にも答えない（2026-10-30 キャリイ DA63T の再現）
+        self.silent = silent
         # False ならエンジン宛て（ATSH7E0 / DA10F1）に答えない（2026-10-30 フリード GB3 の再現）
         self.physical_header_ok = physical_header_ok
         self.hybrid = hybrid     # True なら燃料の種類（PID 51）とハイブリッドバッテリー残量（PID 5B）に答える
@@ -169,7 +171,9 @@ class FakeElm327:
         table["0106"] = f"41 06 {0x7C + self._tick % 8:02X}"
         if not self.engine_running:
             table["0114"] = "41 14 02 FF"
-        if not self.generic_obd:
+        if self.silent:
+            reply = "NO DATA"
+        elif not self.generic_obd:
             reply = {"1A80": "5A 80 38 39 36 36 31", "2101": "61 01 00 7B 0C 80"}.get(cmd)
             if reply is None:
                 reply = f"7F {cmd[:2]} 11"  # このサービスには対応していない

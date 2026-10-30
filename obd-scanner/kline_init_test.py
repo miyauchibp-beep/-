@@ -271,7 +271,11 @@ def main(argv=None):
             for cmd, data in answered:
                 print(f"       {cmd} → {data}")
             if not answered:
-                print("       どの読み取り要求にも返事なし")
+                # 2026-10-30 キャリイ DA63T: 宛先 01 で初期化だけ成功し、何も読めない設定を保存してしまい、
+                # ほかの車の run_scan.bat がこの設定から試すことになった。何も読めない設定は保存せず次へ
+                print("       どの読み取り要求にも返事なし（この設定は使わず、次を試します）")
+                log.write("  => 読み取りに返事なし。保存しない")
+                continue
             found.append({"no": no, "protocol": protocol, "extra_init": extra, "label": label,
                           "reset": reset, "generic_obd": False, "answered": answered})
             if not args.all:
@@ -286,7 +290,8 @@ def main(argv=None):
 
     print()
     if found:
-        best = found[0]
+        # 共通規格に答えた設定を優先する（--all のとき、初期化だけの設定が先に見つかることがある）
+        best = next((f for f in found if f["generic_obd"]), found[0])
         result = {
             "port": args.port,
             "protocol": best["protocol"],

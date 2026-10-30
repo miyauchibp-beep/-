@@ -574,6 +574,21 @@ class ConnectAnyTest(unittest.TestCase):
                                                     "トヨタ K-line（宛先 13・9600bps）"))
         self.assertIn("自動判別 で接続中... だめでした", out.getvalue())
 
+    def test_non_generic_setting_is_tried_last(self):
+        # 初期化だけ成功する設定が保存されていても、ほかの設定を先に試し、だめなときだけ使う
+        import contextlib
+        import io
+        from unittest import mock
+        import obd_scan
+        fake = FakeElm327(vehicle_protocol="4", needs_kw0=False, generic_obd=False)
+        elm = Elm327(fake)
+        with mock.patch("time.sleep"), contextlib.redirect_stdout(io.StringIO()) as out:
+            got = obd_scan.connect_any(elm, ("4", [], "ATZ"))
+        self.assertIn("ほかの設定も試します", out.getvalue())
+        self.assertIn("CAN 11bit 500k で接続中", out.getvalue())
+        self.assertEqual(got[3], "前回つながった設定")
+        self.assertFalse(elm.generic_obd)
+
     def test_saved_setting_is_tried_first(self):
         import contextlib
         import io
@@ -837,6 +852,22 @@ class KlineInitTestScript(unittest.TestCase):
     def tearDown(self):
         os.chdir(self.cwd)
         self.tmp.cleanup()
+
+    def test_init_only_setting_is_not_saved(self):
+        # 2026-10-30 キャリイ DA63T: 宛先 01 で初期化だけ成功し、何も読めない設定を保存してしまった
+        import contextlib
+        import io
+        from unittest import mock
+        fake = FakeElm327(vehicle_protocol="4", needs_kw0=False, init_address="01", silent=True)
+        out = io.StringIO()
+        with mock.patch("obd_scanner.simulator.FakeElm327", return_value=fake), \
+                mock.patch("time.sleep"), contextlib.redirect_stdout(out):
+            kline_init_test.main(["--demo"])
+        text = out.getvalue()
+        self.assertIn("この設定は使わず、次を試します", text)
+        self.assertIn("[ 5]", text)                       # 止まらずに次の設定へ進む
+        self.assertIn("どの設定でも繋がりませんでした", text)
+        self.assertFalse(os.path.exists("working_init.json"))
 
     def test_auto_detect_records_detected_protocol(self):
         # 2026-10-12 の bB（CAN）: 自動判別で成功したら、0 ではなく見つかった番号を保存する
