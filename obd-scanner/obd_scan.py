@@ -33,7 +33,7 @@ try:
     from obd_scanner.elm327 import KNOWN_SETTINGS, Elm327, ObdError
     from obd_scanner.scan import (full_scan, hold_rpm_guided, is_hybrid, measure_running, read_coolant,
                                   read_live, read_rpm, record_cranking, record_free, supported_pids,
-                                  warmup_sample)
+                                  wait_for_idle, warmup_sample)
 except ImportError as e:
     print(f"読み込めないファイルがあります（{e}）。")
     print("obd_scanner フォルダが見つかりません。obd_scan.py と同じ場所にフォルダごとコピーしてください。")
@@ -571,6 +571,8 @@ def run_stages(elm, report, reconnect, demo_fake=None):
         except KeyboardInterrupt:
             print("\n暖機の待機をやめました。")
         stages["warmup_log"] = log
+        print("アクセルを離して、回転がアイドリングに戻るのを待っています（最大 1 分）...")
+        with_retry(elm, reconnect, wait_for_idle, elm, poll=pause)
         print("暖機後のアイドリングを読んでいます（30 秒ほど）...")
         stages["idle_warm"] = with_retry(elm, reconnect, measure_running, elm, supported, 20)
         print_stage("暖機後のアイドリング", stages["idle_warm"])

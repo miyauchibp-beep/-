@@ -296,7 +296,10 @@ class ReplayAdapter:
             for line in f:
                 if line.startswith("> "):
                     cmd, _, reply = line[2:].rstrip("\n").partition(" ")
-                    self.replies.setdefault(cmd, []).append(reply.strip().replace(" | ", "\r"))
+                    reply = reply.strip().replace(" | ", "\r")
+                    if not reply.isascii():
+                        reply = "NO DATA"  # 「（車台番号は記録しない）」など、記録していない応答
+                    self.replies.setdefault(cmd, []).append(reply)
         self._out = bytearray()
 
     def write(self, data):
@@ -426,6 +429,52 @@ class TwoEcuTest(unittest.TestCase):
             self.assertIn(pid, sup)
         self.assertEqual(r["status"]["dtc_count"], 0)
         self.assertEqual(r["dtcs"]["stored"], [])
+
+
+class RealDayzTest(unittest.TestCase):
+    """2026-10-30 日産 デイズ B21W（三菱 3B20、CAN 11bit、エンジンと CVT の 2 つの ECU）。"""
+    DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+    def test_replay_scan(self):
+        from obd_scanner.scan import full_scan
+        elm = Elm327(ReplayAdapter(os.path.join(self.DATA, "dayz_b21w_raw_20261030.txt"), sequential=True))
+        elm.connect(protocol="6")
+        self.assertTrue(elm.engine_only)     # CVT も答えるのでエンジン宛てに切り替わる
+        r = full_scan(elm, trend_seconds=0)
+        self.assertEqual(r["calibration_id"], "1860C5800201")
+        self.assertEqual(r["dtcs"]["stored"], [])
+        m6 = r["mode06"]
+        self.assertEqual(len(m6), 8)         # 複数フレーム・1 つの MID に 2 つの TID も読める
+        cat = next(x for x in m6 if x["mid"] == "21")
+        self.assertEqual((cat["value"], cat["min"], cat["max"], cat["passed"]), (0, 0, 25, True))
+        self.assertEqual(sum(1 for x in m6 if x["mid"] == "A2"), 2)
+
+    def test_auto_checks_ignore_rpm_coming_down(self):
+        # 暖機後の測定が 2,150rpm から下がる途中で始まった。アイドル回転の上下とは扱わない
+        from obd_scanner.checks import auto_checks
+        with open(os.path.join(self.DATA, "dayz_b21w_scan_20261030.json"), encoding="utf-8") as f:
+            report = json.load(f)
+        text = "\n".join(auto_checks(report))
+        self.assertNotIn("アイドル回転の上下", text)
+        self.assertIn("バッテリー電圧が低め", text)
+
+    def test_wait_for_idle(self):
+        from obd_scanner.scan import wait_for_idle
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        fake.rpm = 2150
+        elm = Elm327(fake)
+        elm.connect()
+        n = {"i": 0}
+
+        def sleep(s):
+            n["i"] += 1
+            if n["i"] == 3:
+                fake.rpm = 860          # アクセルを離して回転が下がる
+        fake_time = types.SimpleNamespace(monotonic=lambda: n["i"], sleep=sleep)
+        from unittest import mock
+        with mock.patch("obd_scanner.scan.time", fake_time):
+            self.assertEqual(wait_for_idle(elm), 860)
+        self.assertGreaterEqual(n["i"], 5)  # 3 回続けてアイドルになるまで待った
 
 
 class AfSensorTest(unittest.TestCase):
@@ -1051,7 +1100,7 @@ class PrototypeIdeasTest(unittest.TestCase):
     def test_auto_checks_vacuum_leak_pattern(self):
         from obd_scanner.checks import auto_checks
         trend = lambda pid, vals: {"pid": pid, "count": len(vals), "min": min(vals), "max": max(vals),
-                                   "avg": sum(vals) / len(vals)}
+                                   "avg": sum(vals) / len(vals), "values": vals}
         report = {
             "battery_voltage": 11.9, "engine_running": False,
             "mode06": [{"name": "触媒 B1", "tid": "80", "value": 5, "min": 10, "max": 100, "passed": False}],

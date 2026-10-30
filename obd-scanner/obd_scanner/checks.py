@@ -15,11 +15,30 @@ def _trend(stage, pid):
     return None
 
 
+IDLE_MAX_RPM = 1200  # これより高い回転のサンプルは「アイドル」の判定に入れない（ファーストアイドルは 1,100 前後）
+
+
+def _idle_values(stage, pid):
+    """trend の値のうち、回転がアイドル（IDLE_MAX_RPM 以下）だった回のものだけ。
+
+    06 と 0C は毎回同じ周で読むので、並びが対応している（数が違えば全部使う）。
+    """
+    item, rpm = _trend(stage, pid), _trend(stage, "0C")
+    if not item:
+        return []
+    values = item.get("values") or []
+    if not values:
+        return []
+    if values and rpm and len(rpm.get("values") or []) == len(values):
+        return [v for v, r in zip(values, rpm["values"]) if 0 < r <= IDLE_MAX_RPM]
+    return values
+
+
 def _total_trim(stage):
-    """短期 + 長期の燃料補正（%）。trend があれば短期は平均を使う。"""
+    """短期 + 長期の燃料補正（%）。trend があれば、アイドル中の短期補正の平均を使う。"""
     live = _live(stage)
-    short = _trend(stage, "06")
-    short = short["avg"] if short else live.get("06")
+    idle_short = _idle_values(stage, "06")
+    short = round(sum(idle_short) / len(idle_short), 1) if idle_short else live.get("06")
     long_ = live.get("07")
     if short is None or long_ is None:
         return None
@@ -46,9 +65,9 @@ def auto_checks(report):
             if abs(ti) > 10 and abs(th) > 10 and ti * th > 0:
                 flags.append(f"燃料補正が全域で同じ向きにずれている（アイドル {ti:+.1f}%、2,500rpm {th:+.1f}%）")
 
-    rpm = _trend(idle, "0C")
-    if rpm and rpm["count"] >= 10 and rpm["max"] - rpm["min"] > 200:
-        flags.append(f"アイドル回転の上下が大きい（{rpm['min']}〜{rpm['max']} rpm）")
+    rpm = _idle_values(idle, "0C")
+    if len(rpm) >= 10 and max(rpm) - min(rpm) > 200:
+        flags.append(f"アイドル回転の上下が大きい（{min(rpm)}〜{max(rpm)} rpm）")
 
     running_volts = [_live(st).get("42") for st in (idle, stages.get("idle_after_start")) if st]
     running_volts = [v for v in running_volts if v is not None]
@@ -59,7 +78,7 @@ def auto_checks(report):
             flags.append(f"エンジン稼働中の電圧が高め（{max(running_volts)}V）")
     battery = report.get("battery_voltage")
     if battery is not None and not report.get("engine_running") and battery < 12.2:
-        flags.append(f"エンジン停止時のバッテリー電圧が低め（{battery}V）")
+        flags.append(f"キー ON・エンジン停止時のバッテリー電圧が低め（{battery}V。電装の負荷で少し下がる値）")
 
     log = stages.get("warmup_log") or []
     if len(log) >= 90:  # 10 秒ごとに 15 分以上

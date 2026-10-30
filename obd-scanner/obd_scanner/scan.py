@@ -338,6 +338,24 @@ def measure_running(elm, supported, trend_seconds=20.0):
     }
 
 
+def wait_for_idle(elm, idle_max=1300, needed=3, timeout=60.0, poll=1.0):
+    """回転がアイドリングまで下がって落ち着くのを待つ（暖機中に吹かしていた・ファーストアイドルのとき）。
+
+    2026-10-30 デイズ: 暖機中 2,200rpm 前後だったまま「暖機後のアイドリング」を測り始め、
+    回転が下がる途中が入って自動チェックが「アイドル回転の上下が大きい」と誤って出した。
+    """
+    start = time.monotonic()
+    calm = 0
+    rpm = None
+    while time.monotonic() - start < timeout:
+        rpm = read_rpm(elm)
+        calm = calm + 1 if rpm is not None and 0 < rpm <= idle_max else 0
+        if calm >= needed:
+            break
+        time.sleep(poll)
+    return rpm
+
+
 def warmup_sample(elm, supported):
     """暖機中の記録 1 回分（水温・回転・燃料補正・O2）。"""
     row = {"time": datetime.now().isoformat(timespec="seconds")}
