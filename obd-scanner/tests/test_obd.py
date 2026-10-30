@@ -589,6 +589,26 @@ class ConnectAnyTest(unittest.TestCase):
         self.assertEqual(got[3], "前回つながった設定")
         self.assertFalse(elm.generic_obd)
 
+    def test_no_ai_when_nothing_readable(self):
+        import contextlib
+        import io
+        from unittest import mock
+        import obd_scan
+        fake = FakeElm327(vehicle_protocol="4", needs_kw0=False, generic_obd=False)
+        called = []
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with mock.patch("obd_scanner.simulator.FakeElm327", return_value=fake), \
+                        mock.patch.object(obd_scan, "run_ai", lambda *a, **kw: called.append(1)), \
+                        mock.patch("time.sleep"), contextlib.redirect_stdout(io.StringIO()) as out:
+                    obd_scan.main(["--demo"])
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(called, [])
+        self.assertIn("Claude の診断はとばします", out.getvalue())
+
     def test_saved_setting_is_tried_first(self):
         import contextlib
         import io

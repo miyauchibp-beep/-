@@ -742,7 +742,11 @@ def main(argv=None):
         json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"\n保存しました: {path}")
     print(f"通信の記録: {raw_path}")
-    if not args.no_ai:
+    if not report.get("generic_obd"):
+        # 2026-10-30 キャリイ DA63T: 初期化だけで何も読めず、Claude に渡せるのがバッテリー電圧だけだった
+        print("\n共通規格のデータが読めなかったので、Claude の診断はとばします。")
+        print("メーカー専用の診断機（スナップオンなど）で確認してください。")
+    elif not args.no_ai:
         run_ai(report, stamp, report_path=path, prompt_only=args.prompt_only, model=args.model)
     return 0
 
