@@ -477,6 +477,44 @@ class RealDayzTest(unittest.TestCase):
         self.assertGreaterEqual(n["i"], 5)  # 3 回続けてアイドルになるまで待った
 
 
+class RealSolioTest(unittest.TestCase):
+    """2026-10-30 スズキ ソリオ HYBRID MA36S（マイルドハイブリッド、CAN 11bit、ECU 1 つ、較正 ID なし）。"""
+    DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+    def test_replay_scan(self):
+        from obd_scanner.scan import full_scan, is_hybrid
+        elm = Elm327(ReplayAdapter(os.path.join(self.DATA, "solio_ma36s_raw_20261030.txt"), sequential=True))
+        elm.connect(protocol="6")
+        self.assertFalse(elm.engine_only)   # 答える ECU は 1 つだけ
+        r = full_scan(elm, trend_seconds=0)
+        self.assertIsNone(r["calibration_id"])
+        self.assertIsNone(r["vin"])
+        self.assertFalse(is_hybrid(r))      # マイルドハイブリッドは汎用 OBD ではガソリン車と同じに見える
+        self.assertEqual([x["mid"] for x in r["mode06"]], ["21", "31"])
+
+    def test_rich_at_2500_is_not_vacuum_leak(self):
+        from obd_scanner.checks import auto_checks
+        with open(os.path.join(self.DATA, "solio_ma36s_scan_20261030.json"), encoding="utf-8") as f:
+            report = json.load(f)
+        text = "\n".join(auto_checks(report))
+        self.assertNotIn("エア吸い", text)
+        self.assertIn("回転を上げたときだけ濃い側", text)
+
+    def test_hold_reads_purge_and_maf(self):
+        from obd_scanner.scan import hold_rpm_guided
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        fake.rpm = 2500
+        elm = Elm327(fake)
+        elm.connect()
+        from unittest import mock
+        with mock.patch("time.sleep"):
+            hold = hold_rpm_guided(elm, {0x0C, 0x06, 0x14, 0x07, 0x05}, lambda kind: None,
+                                   settle=0, duration=0.05, poll=0)
+        self.assertIn("05", {v["pid"] for v in hold["live"]})
+        self.assertIn("0107", fake.sent)         # 長期補正も読みに行く
+        self.assertNotIn("012E", fake.sent)      # 対応していない項目は読まない
+
+
 class AfSensorTest(unittest.TestCase):
     def test_pid34_lambda(self):
         # バネット（マツダ L8）は PID 14 がなく、PID 34（A/F センサ）に対応

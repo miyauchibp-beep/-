@@ -56,12 +56,20 @@ def auto_checks(report):
         flags.append(f"アイドル時の燃料補正の合計（短期＋長期）が {ti:+.1f}% と大きい")
     if ti is not None and hold:
         short = _trend(hold, "06")
-        long_ = _live(idle).get("07")
+        long_ = _live(hold).get("07", _live(idle).get("07"))
         if short and long_ is not None:
             th = round(short["avg"] + long_, 1)
-            if ti - th > 8:
+            # エア吸いはアイドルで補正がプラス（薄い）に振れ、回転を上げると戻る。
+            # 2026-10-30 ソリオ: アイドル -0.4% → 2,500rpm -8.9%（回転を上げたときだけ濃い側）を
+            # 差だけで「エア吸い」と誤って出したので、向きも見る
+            if ti > 8 and ti - th > 8:
                 flags.append(f"燃料補正の合計がアイドル {ti:+.1f}% → 2,500rpm {th:+.1f}% と大きく下がる"
                              "（低負荷だけ薄い。エア吸いの傾向）")
+            elif th < -8 and th - ti < -8:
+                purge = _live(hold).get("2E")
+                flags.append(f"燃料補正の合計がアイドル {ti:+.1f}% → 2,500rpm {th:+.1f}%（回転を上げたときだけ濃い側。"
+                             "パージ・吸入空気量の偏り・燃料過多など"
+                             + (f"。2,500rpm でのパージ指令 {purge}%" if purge is not None else "") + "）")
             if abs(ti) > 10 and abs(th) > 10 and ti * th > 0:
                 flags.append(f"燃料補正が全域で同じ向きにずれている（アイドル {ti:+.1f}%、2,500rpm {th:+.1f}%）")
 

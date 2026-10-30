@@ -364,6 +364,11 @@ def warmup_sample(elm, supported):
     return row
 
 
+# 2,500rpm 保持の終わりに読む項目（長期補正・パージ・吸入空気量・吸気管圧力・負荷・水温・電圧・A/F）。
+# 2026-10-30 ソリオ: 2,500rpm で補正が -9% になったが、パージや吸入空気量がなく理由を絞れなかった
+HOLD_LIVE_PIDS = [0x07, 0x2E, 0x10, 0x0B, 0x04, 0x05, 0x42, 0x34]
+
+
 def hold_rpm_guided(elm, supported, beep, target=2500, band=300, settle=3.0, duration=15.0,
                     timeout=120.0, poll=0.3, on_rpm=None):
     """回転数を目標付近に保ってもらい、保てたら自動で測る（PC を見なくてよいよう、音で案内する）。
@@ -409,6 +414,8 @@ def hold_rpm_guided(elm, supported, beep, target=2500, band=300, settle=3.0, dur
                     beep("low" if v["value"] < low else "high")
 
     trend = sample_trend(elm, supported, duration, on_round=guide)
+    # 保ったまま、補正の理由を見る項目も 1 回読む（1 秒ほど。終わりの合図はそのあと）
+    live = read_live(elm, [p for p in HOLD_LIVE_PIDS if p in supported])
     beep("done")
     in_range = sum(1 for r in rpms if low <= r <= high)
     return {
@@ -416,7 +423,7 @@ def hold_rpm_guided(elm, supported, beep, target=2500, band=300, settle=3.0, dur
         "target_rpm": target,
         "rpm_band": [low, high],
         "in_range_ratio": round(in_range / len(rpms), 2) if rpms else None,
-        "live": [],
+        "live": live,
         "trend": trend,
         "pending_dtcs": read_pending(elm),
     }
