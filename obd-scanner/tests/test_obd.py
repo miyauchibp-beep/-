@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import sys
@@ -216,10 +218,29 @@ class _FakeStream:
         return self._msg
 
 
-class _FakeClient:
-    """Claude API の代わり。送られた引数を記録し、決まった文を返す。"""
+SAMPLE_DIAGNOSIS = {
+    "summary": "1 番気筒の失火。点火系から確認する。",
+    "candidates": [
+        {"title": "イグニッションコイル不良", "likelihood": "高", "system": "点火",
+         "evidence": ["P0301 が記録", "フリーズフレームで 1,600rpm・水温 83℃"]},
+        {"title": "プラグ摩耗", "likelihood": "中", "system": "点火", "evidence": ["走行距離が多い"]},
+    ],
+    "data_notes": ["キー ON 時の回転数 0 は正常"],
+    "checks": [{"title": "コイルの入れ替え", "how": "1 番と 2 番のコイルを入れ替えて失火が移るか見る",
+                "criteria": "失火が 2 番に移ればコイル不良", "tools": "ソケットレンチ"}],
+    "repairs": [{"cause": "コイル不良", "work": "コイル交換", "parts": "5,000〜10,000 円", "labor": "0.3h"}],
+    "cautions": ["高電圧に注意"],
+    "urgency": {"level": "早めに点検", "reason": "失火が続くと触媒を傷める"},
+    "customer_explanation": "エンジンの点火に関わる部品の不具合が疑われます。",
+}
 
-    def __init__(self, chunks=("## 見立て\n", "問題なし"), stop_reason="end_turn"):
+
+class _FakeClient:
+    """Claude API の代わり。送られた引数を記録し、決まった文を返す（既定は JSON の診断を 2 つに分けて）。"""
+
+    _JSON = json.dumps(SAMPLE_DIAGNOSIS, ensure_ascii=False)
+
+    def __init__(self, chunks=(_JSON[:40], _JSON[40:]), stop_reason="end_turn"):
         self.calls = []
         outer = self
 
@@ -235,13 +256,20 @@ class AiDiagTest(unittest.TestCase):
     REPORT = {"protocol": "6 ISO 15765-4 CAN", "dtcs": {"stored": [{"code": "P0301", "description": "1番気筒 失火"}]}}
 
     def test_diagnose_streams_and_returns_text(self):
-        from obd_scanner.ai_diag import diagnose
+        from obd_scanner.ai_diag import DIAGNOSIS_SCHEMA, diagnose
         client = _FakeClient()
         got = []
-        text = diagnose(self.REPORT, "トヨタ bB QNC21", "アイドリング不安定", client=client, on_text=got.append)
-        self.assertEqual(text, "## 見立て\n問題なし")
-        self.assertEqual("".join(got), text)
+        result = diagnose(self.REPORT, "トヨタ bB QNC21", "アイドリング不安定", client=client, on_text=got.append)
+        self.assertEqual(result["data"], SAMPLE_DIAGNOSIS)
+        self.assertEqual(json.loads("".join(got)), SAMPLE_DIAGNOSIS)  # 進み具合用に断片が届く
+        text = result["text"]
+        for heading in ("## 見立て", "## 原因候補（可能性の高い順）", "## 確認手順", "## 修理方法",
+                        "## 注意点", "## 緊急度", "## お客様向けの説明"):
+            self.assertIn(heading, text)        # これまでの診断メモと同じ見出し
+        self.assertIn("1. **イグニッションコイル不良**（可能性：高、点火）", text)
+        self.assertIn("**早めに点検**", text)
         kw = client.calls[0]
+        self.assertEqual(kw["output_config"]["format"], {"type": "json_schema", "schema": DIAGNOSIS_SCHEMA})
         self.assertEqual(kw["model"], "claude-sonnet-5-5")
         self.assertEqual(kw["fallbacks"], "default")
         self.assertEqual(kw["betas"], ["server-side-fallback-2026-07-01"])
@@ -266,8 +294,29 @@ class AiDiagTest(unittest.TestCase):
 
     def test_truncated_answer_is_marked(self):
         from obd_scanner.ai_diag import diagnose
-        text = diagnose(self.REPORT, client=_FakeClient(stop_reason="max_tokens"))
-        self.assertIn("途中で切れました", text)
+        result = diagnose(self.REPORT, client=_FakeClient(chunks=('{"summary": "途中',), stop_reason="max_tokens"))
+        self.assertIsNone(result["data"])            # JSON として読めないときは届いた文をそのまま残す
+        self.assertIn("途中で切れました", result["text"])
+
+    def test_schema_is_strict(self):
+        # 構造化出力では、すべての object に additionalProperties: false と required が要る
+        from obd_scanner.ai_diag import DIAGNOSIS_SCHEMA
+
+        def walk(node):
+            if node.get("type") == "object":
+                self.assertIs(node["additionalProperties"], False)
+                self.assertEqual(set(node["required"]), set(node["properties"]))
+                for child in node["properties"].values():
+                    walk(child)
+            elif node.get("type") == "array":
+                walk(node["items"])
+        walk(DIAGNOSIS_SCHEMA)
+
+    def test_chat_prompt_stays_markdown(self):
+        from obd_scanner.ai_diag import SYSTEM_PROMPT, SYSTEM_PROMPT_JSON
+        self.assertIn("出力の形（Markdown）", SYSTEM_PROMPT)
+        self.assertIn("JSON スキーマ", SYSTEM_PROMPT_JSON)
+        self.assertIn("時計の経過時間ではない", SYSTEM_PROMPT_JSON)  # 前提のルールは両方に入っている
 
     def test_missing_api_key_message(self):
         from obd_scanner.ai_diag import AiDiagError, diagnose
@@ -1088,6 +1137,55 @@ class CasesTest(unittest.TestCase):
                 self.assertEqual(got["past"][0]["cause"], "プラグのかぶり")
                 # 別の車には渡さない
                 self.assertEqual(cases.similar_cases({"calibration_id": "31205100"}), [])
+            finally:
+                os.chdir(cwd)
+
+    def test_pick_hit_candidate_from_json_diagnosis(self):
+        # 決まった形の診断（diag_日時.json）があれば、当たった候補の番号を選ぶ
+        import record_result
+        from unittest import mock
+        from obd_scanner import cases
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                self._setup_logs()
+                with open(os.path.join("scan_logs", "diag_20261029_165618.json"), "w", encoding="utf-8") as f:
+                    json.dump({"diagnosis": SAMPLE_DIAGNOSIS}, f, ensure_ascii=False)
+                answers = iter(["", "プラグ摩耗", "プラグ交換", "9", "2", "電極が丸い"])
+                out = io.StringIO()
+                with mock.patch.object(record_result, "ask", lambda prompt: next(answers)), \
+                        contextlib.redirect_stdout(out):
+                    self.assertEqual(record_result.main(), 0)
+                self.assertIn("1 = イグニッションコイル不良", out.getvalue())
+                case = cases.load_cases()[0]
+                self.assertEqual((case["hit_rank"], case["hit_candidate"]), (2, "プラグ摩耗"))
+                self.assertIn("候補に入っていた", case["verdict"])
+                with open(os.path.join("scan_logs", "diag_20261029_165618.md"), encoding="utf-8") as f:
+                    self.assertIn("当たった候補: 2 番（プラグ摩耗）", f.read())
+                self.assertEqual(cases.verdict_from_rank(0), "3")
+                self.assertEqual(cases.verdict_from_rank(1), "1")
+            finally:
+                os.chdir(cwd)
+
+    def test_run_ai_saves_structured_diagnosis(self):
+        import obd_scan
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("scan_logs")
+                answers = iter(["", "トヨタ bB", "失火"])
+                result = {"data": SAMPLE_DIAGNOSIS, "text": "## 見立て\nx"}
+                with mock.patch.object(obd_scan, "diagnose", lambda *a, **kw: result), \
+                        mock.patch.object(obd_scan, "ask", lambda prompt: next(answers)), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    obd_scan.run_ai({}, "20261030_200000", scan_name="scan_x.json")
+                with open(os.path.join("scan_logs", "diag_20261030_200000.json"), encoding="utf-8") as f:
+                    saved = json.load(f)
+                self.assertEqual(saved["diagnosis"]["urgency"]["level"], "早めに点検")
+                self.assertEqual(saved["vehicle"], "トヨタ bB")
             finally:
                 os.chdir(cwd)
 

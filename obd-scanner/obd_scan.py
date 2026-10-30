@@ -277,20 +277,37 @@ def run_ai(report, stamp, report_path=None, scan_name=None, prompt_only=False, m
         print("メモ帳で開いて全部コピーし（Ctrl+A → Ctrl+C）、claude.ai のチャットに貼ってください。")
         print(f"診断メモ（答え合わせ用）: {md_path}")
         return
-    print("\nClaude が診断しています...\n")
+    print("\nClaude が診断しています（1〜2 分）", end="", flush=True)
+    received = [0]
+
+    def progress(chunk):
+        # 届くのは JSON の断片なので、そのままは見せずに進み具合だけ点で表す
+        before = received[0] // 400
+        received[0] += len(chunk)
+        if received[0] // 400 > before:
+            print("・", end="", flush=True)
     try:
-        text = diagnose(report, vehicle, symptom, on_text=lambda t: print(t, end="", flush=True),
-                        past_cases=past, **({"model": model} if model else {}))
+        result = diagnose(report, vehicle, symptom, on_text=progress,
+                          past_cases=past, **({"model": model} if model else {}))
     except AiDiagError as e:
-        print(f"診断できませんでした: {e}")
+        print(f"\n診断できませんでした: {e}")
         return
-    print()
+    if isinstance(result, dict):
+        text, data = result["text"], result.get("data")
+    else:
+        text, data = result, None
+    print("\n\n" + text)
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(header)
         f.write(text + "\n\n---\nClaude による候補です。最終判断は実車で確認してください。\n"
                 "修理が終わったら run_result.bat で実際の原因を記録してください（答え合わせ）。\n")
+    if data is not None:
+        # アプリや答え合わせで使う、決まった形の診断（候補の番号・緊急度など）
+        with open(md_path[:-3] + ".json", "w", encoding="utf-8") as f:
+            json.dump({"vehicle": vehicle, "symptom": symptom, "scan": scan_name, "diagnosis": data},
+                      f, ensure_ascii=False, indent=2)
     if report_path:
-        report["ai_diagnosis"] = {"vehicle": vehicle, "symptom": symptom, "text": text}
+        report["ai_diagnosis"] = {"vehicle": vehicle, "symptom": symptom, "text": text, "data": data}
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"\n診断メモを保存しました: {md_path}")

@@ -14,7 +14,7 @@ import sys
 
 try:
     from obd_scanner.cases import (VERDICTS, hit_rate, make_case, recent_diags, save_case, scan_for,
-                                   write_csv)
+                                   verdict_from_rank, write_csv)
     from obd_scanner.console import run_from_console
 except ImportError as e:
     print(f"読み込めないファイルがあります（{e}）。")
@@ -60,15 +60,29 @@ def main():
     while not cause:
         cause = ask("実際の原因（例: プラグのかぶり、O2 センサ不良）: ")
     work = ask("作業・交換部品（例: プラグ 3 本交換、バッテリー充電）: ")
-    print("Claude の見立ては？")
-    for k, v in VERDICTS.items():
-        print(f"  {k} = {v}")
-    verdict = ""
-    while verdict not in VERDICTS:
-        verdict = ask("番号を入れて Enter: ")
+    hit_rank = None
+    if diag["candidates"]:
+        # 決まった形の診断なら、当たった候補の番号を選ぶ（当たり外れはそこから決まる）
+        print("Claude の原因候補（可能性の高い順）のうち、当たったのはどれ？")
+        for n, title in enumerate(diag["candidates"], 1):
+            print(f"  {n} = {title}")
+        print("  0 = どれでもない（外れ）")
+        choices = [str(n) for n in range(len(diag["candidates"]) + 1)]
+        pick = ""
+        while pick not in choices:
+            pick = ask("番号を入れて Enter: ")
+        hit_rank = int(pick)
+        verdict = verdict_from_rank(hit_rank)
+    else:
+        print("Claude の見立ては？")
+        for k, v in VERDICTS.items():
+            print(f"  {k} = {v}")
+        verdict = ""
+        while verdict not in VERDICTS:
+            verdict = ask("番号を入れて Enter: ")
     note = ask("決め手・メモ（例: プラグの臭いで判断、車を貸していた）: ")
 
-    case = make_case(diag, scan_for(diag), cause, work, verdict, note)
+    case = make_case(diag, scan_for(diag), cause, work, verdict, note, hit_rank=hit_rank)
     save_case(case, md_path=diag["path"])
     write_csv()
     print(f"\n記録しました: scan_logs\\cases.jsonl と {os.path.basename(diag['path'])}")

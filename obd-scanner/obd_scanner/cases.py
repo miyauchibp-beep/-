@@ -39,6 +39,14 @@ def read_diag(md_path):
         m = re.search(rf"^- {label}: (.*)$", text, re.M)
         if m and m.group(1) != "（未入力）":
             info[key] = m.group(1).strip()
+    # 決まった形の診断（diag_日時.json）があれば、原因候補の名前を読む（答え合わせで番号を選ぶため）
+    info["candidates"] = []
+    try:
+        with open(md_path[:-3] + ".json", encoding="utf-8") as f:
+            data = json.load(f).get("diagnosis") or {}
+        info["candidates"] = [c["title"] for c in data.get("candidates") or []]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
     return info
 
 
@@ -73,7 +81,14 @@ def all_codes(scan):
     return codes
 
 
-def make_case(diag, scan, cause, work="", verdict="", note=""):
+def verdict_from_rank(rank):
+    """当たった候補の順位（0 = 候補になかった）から見立ての当たり外れを決める。"""
+    return "1" if rank == 1 else "2" if rank and rank > 1 else "3"
+
+
+def make_case(diag, scan, cause, work="", verdict="", note="", hit_rank=None):
+    """hit_rank: 当たった原因候補の順位（1 から。0 = 候補になかった、None = 候補の一覧がない古い診断）。"""
+    candidates = diag.get("candidates") or []
     return {
         "recorded_at": datetime.now().isoformat(timespec="seconds"),
         "diag": os.path.basename(diag["path"]),
@@ -85,6 +100,9 @@ def make_case(diag, scan, cause, work="", verdict="", note=""):
         "cause": cause,
         "work": work,
         "verdict": VERDICTS.get(verdict, verdict),
+        "hit_rank": hit_rank,
+        "hit_candidate": candidates[hit_rank - 1] if hit_rank and hit_rank <= len(candidates) else "",
+        "candidates": candidates,
         "note": note,
     }
 
@@ -102,6 +120,8 @@ def save_case(case, md_path=None, path=CASES_FILE):
                 f.write(f"- 作業・交換部品: {case['work']}\n")
             if case["verdict"]:
                 f.write(f"- Claude の見立て: {case['verdict']}\n")
+            if case.get("hit_rank"):
+                f.write(f"- 当たった候補: {case['hit_rank']} 番（{case['hit_candidate']}）\n")
             if case["note"]:
                 f.write(f"- 決め手・メモ: {case['note']}\n")
 
@@ -129,14 +149,15 @@ def similar_cases(report, cases=None, limit=5):
     vin = report.get("vin")
     hits = [c for c in cases
             if (cal and c.get("calibration_id") == cal) or (vin and c.get("vin") == vin)]
-    keep = ("vehicle", "symptom", "dtcs", "cause", "work", "verdict", "note", "recorded_at")
+    keep = ("vehicle", "symptom", "dtcs", "cause", "work", "verdict", "hit_candidate", "note", "recorded_at")
     return [{k: c.get(k) for k in keep if c.get(k)} for c in reversed(hits)][:limit]
 
 
 CSV_FILE = os.path.join(LOG_DIR, "cases.csv")
 CSV_COLUMNS = [("recorded_at", "記録日"), ("vehicle", "車両"), ("symptom", "症状"), ("dtcs", "故障コード"),
                ("cause", "実際の原因"), ("work", "作業・交換部品"), ("verdict", "Claude の見立て"),
-               ("note", "決め手・メモ"), ("calibration_id", "較正 ID"), ("diag", "診断メモ")]
+               ("hit_rank", "当たった候補の順位"), ("hit_candidate", "当たった候補"), ("note", "決め手・メモ"),
+               ("calibration_id", "較正 ID"), ("diag", "診断メモ")]
 
 
 def write_csv(cases=None, path=CSV_FILE):

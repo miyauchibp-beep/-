@@ -5,10 +5,13 @@ import json
 # 既定は Sonnet（1 回 数円）。難しい車は --model claude-opus-5-5 で Opus に切り替えられる
 MODEL = "claude-sonnet-5-5"
 
-SYSTEM_PROMPT = """あなたは日本の自動車整備工場（板金・一般整備）で、整備士の診断を手伝うアシスタントです。
+RULES_HEAD = """あなたは日本の自動車整備工場（板金・一般整備）で、整備士の診断を手伝うアシスタントです。
 OBD2 スキャンツールで読み取ったデータと、車両情報・症状をもとに、整備士が次に何をすればよいかを日本語でまとめてください。
 
-出力の形（Markdown）:
+"""
+
+# チャットに貼る文（p / --prompt-only）用。チャットでは形を強制できないので Markdown で答えてもらう
+OUTPUT_MARKDOWN = """出力の形（Markdown）:
 ## 見立て
 2〜3 行で要約。データだけで判断できないことは、そう書く。
 ## 原因候補（可能性の高い順）
@@ -24,7 +27,26 @@ OBD2 スキャンツールで読み取ったデータと、車両情報・症状
 ## お客様向けの説明
 専門用語を避けた 3〜4 文。断定しすぎず、点検の必要性が伝わる文にする。
 
-前提:
+"""
+
+# API で診断するとき。決まった形の JSON で返してもらい、ツールが診断メモ（Markdown）に組み立てる。
+# 答え合わせで「何番の候補が当たったか」を記録でき、アプリの画面にもそのまま並べられる
+OUTPUT_JSON = """出力の形: 指定の JSON スキーマに従う。各項目の中身:
+- summary: 見立てを 2〜3 行で。データだけで判断できないことは、そう書く。
+- candidates: 原因候補を可能性の高い順に（多くても 5 つ）。title は短い名前、likelihood は 高・中・低、
+  system は関係する系統、evidence は根拠にしたデータ（故障コード・フリーズフレーム・ライブデータの値）を 1 項目 1 文で。
+  故障がないと判断したときは、気になる点を候補として挙げてよい（likelihood は低）。
+- data_notes: データの読み方の注意（キー ON 時の値は正常、など）。なければ空の配列。
+- checks: 確認手順を、安く早く確かめられるものから順に。title・how（測定箇所・やり方）・
+  criteria（基準値の目安・判定）・tools（使う工具。なければ「なし」）。
+- repairs: 原因ごとの作業と、部品・工賃のおおまかな目安（地域・年式で変わる前提）。
+- cautions: 安全上の注意、関連して点検すべき箇所、再発防止など。
+- urgency: level は「すぐ止める／早めに点検／様子見」のどれか、reason は理由を 1〜2 行。
+- customer_explanation: お客様向けの説明。専門用語を避けた 3〜4 文。断定しすぎず、点検の必要性が伝わる文にする。
+
+"""
+
+RULES = """前提:
 - 判断は候補であって断定ではない。最終判断は整備士が実車で確かめる。
 - 読み取りは キー ON・エンジン停止 の場合もある。そのときの値（回転数 0、吸気管圧力≒大気圧、O2 センサ≒0V など）を異常と取り違えない。
 - 「DTC 消去後の時間」「MIL 点灯中の時間」（PID 4E / 4D）は、キー ON・エンジン稼働中の時間を積算した値で、
@@ -76,6 +98,54 @@ OBD2 スキャンツールで読み取ったデータと、車両情報・症状
 - 故障コードがなく症状もないときは、データから読み取れる点（バッテリー電圧、レディネス未完了、DTC 消去後の経過など）を短く伝えるだけでよい。
 """
 
+SYSTEM_PROMPT = RULES_HEAD + OUTPUT_MARKDOWN + RULES        # チャットに貼る文
+SYSTEM_PROMPT_JSON = RULES_HEAD + OUTPUT_JSON + RULES    # API で JSON を返させる
+
+_STR = {"type": "string"}
+_STRS = {"type": "array", "items": _STR}
+
+
+def _obj(**props):
+    return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
+
+
+DIAGNOSIS_SCHEMA = _obj(
+    summary=_STR,
+    candidates={"type": "array", "items": _obj(
+        title=_STR,
+        likelihood={"type": "string", "enum": ["高", "中", "低"]},
+        system={"type": "string", "enum": ["燃料", "点火", "吸気", "排気・触媒", "センサー", "電装・充電",
+                                          "始動・イモビ", "機械・圧縮", "冷却", "ミッション", "その他"]},
+        evidence=_STRS)},
+    data_notes=_STRS,
+    checks={"type": "array", "items": _obj(title=_STR, how=_STR, criteria=_STR, tools=_STR)},
+    repairs={"type": "array", "items": _obj(cause=_STR, work=_STR, parts=_STR, labor=_STR)},
+    cautions=_STRS,
+    urgency=_obj(level={"type": "string", "enum": ["すぐ止める", "早めに点検", "様子見"]}, reason=_STR),
+    customer_explanation=_STR,
+)
+
+
+def render_markdown(d):
+    """JSON の診断を、これまでと同じ見出しの Markdown にする（診断メモ・画面表示用）。"""
+    out = ["## 見立て", d["summary"], "", "## 原因候補（可能性の高い順）"]
+    for n, c in enumerate(d["candidates"], 1):
+        out.append(f"{n}. **{c['title']}**（可能性：{c['likelihood']}、{c['system']}）")
+        out += [f"   - {e}" for e in c["evidence"]]
+    if d["data_notes"]:
+        out += ["", "**データの読み方について**"] + [f"- {x}" for x in d["data_notes"]]
+    out += ["", "## 確認手順"]
+    for n, c in enumerate(d["checks"], 1):
+        out.append(f"{n}. **{c['title']}**（工具: {c['tools']}）")
+        out += [f"   - {c['how']}", f"   - 判定: {c['criteria']}"]
+    out += ["", "## 修理方法", "費用は地域・年式・部品の入手先で変わります。目安として見てください。", "",
+            "| 原因 | 作業 | 部品の目安 | 工賃の目安 |", "|---|---|---|---|"]
+    out += [f"| {r['cause']} | {r['work']} | {r['parts']} | {r['labor']} |" for r in d["repairs"]]
+    out += ["", "## 注意点"] + [f"- {x}" for x in d["cautions"]]
+    out += ["", "## 緊急度", f"**{d['urgency']['level']}**。{d['urgency']['reason']}",
+            "", "## お客様向けの説明", d["customer_explanation"]]
+    return "\n".join(out)
+
 
 def build_user_message(report, vehicle="", symptom="", past_cases=None):
     """スキャン結果と、整備士が入力した車両情報・症状を 1 つのメッセージにする。"""
@@ -95,7 +165,10 @@ class AiDiagError(Exception):
 
 
 def diagnose(report, vehicle="", symptom="", model=MODEL, on_text=None, client=None, past_cases=None):
-    """Claude に診断させ、Markdown の本文を返す。on_text を渡すと、届いた文字から順に呼ぶ。"""
+    """Claude に診断させ、{"data": JSON の診断（dict）, "text": 診断メモの Markdown} を返す。
+
+    on_text を渡すと、届いた文字（JSON の断片）から順に呼ぶ（進み具合の表示用）。
+    """
     try:
         import anthropic
     except ImportError as e:
@@ -106,11 +179,12 @@ def diagnose(report, vehicle="", symptom="", model=MODEL, on_text=None, client=N
         # 安全上の判定で断られたときは、サーバー側で別のモデルに自動で切り替える
         with client.beta.messages.stream(
             model=model,
-            max_tokens=16000,
+            max_tokens=32000,
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
-            output_config={"effort": "high"},
-            system=SYSTEM_PROMPT,
+            output_config={"effort": "high",
+                           "format": {"type": "json_schema", "schema": DIAGNOSIS_SCHEMA}},
+            system=SYSTEM_PROMPT_JSON,
             messages=[{"role": "user", "content": build_user_message(report, vehicle, symptom, past_cases)}],
         ) as stream:
             for text in stream.text_stream:
@@ -138,7 +212,13 @@ def diagnose(report, vehicle="", symptom="", model=MODEL, on_text=None, client=N
 
     if message.stop_reason == "refusal":
         raise AiDiagError("Claude が回答を控えました。症状の書き方を変えてやり直してください")
-    text = "".join(b.text for b in message.content if b.type == "text")
+    raw = "".join(b.text for b in message.content if b.type == "text")
+    try:
+        data = json.loads(raw)
+        text = render_markdown(data)
+    except (ValueError, KeyError, TypeError):
+        # 途中で切れたなどで JSON として読めないときは、届いた文をそのまま残す
+        data, text = None, raw
     if message.stop_reason == "max_tokens":
         text += "\n\n（回答が長すぎて途中で切れました）"
-    return text
+    return {"data": data, "text": text}
