@@ -149,7 +149,9 @@ class FakeElm327:
             "0A": "4A 00" if self._is_can else "4A 00 00 00 00 00 00",
             # モード 06（CAN のみ）: MID 01（フロント O2）と 21（触媒 B1）。触媒は下限を下回って不合格
             "0600": "46 00 80 00 00 01" if self._is_can else "NO DATA",
-            "0620": "46 20 80 00 00 00" if self._is_can else "NO DATA",
+            "0620": "46 20 80 00 08 00" if self._is_can else "NO DATA",
+            # MID 35（VVT）: UASID 80 以上は符号付き。値 -160、範囲 -1000〜1000 で合格
+            "0635": "46 35 D9 AF FF 60 FC 18 03 E8" if self._is_can else "NO DATA",
             "0601": "46 01 01 0A 01 2C 00 64 03 E8" if self._is_can else "NO DATA",
             "0621": "46 21 80 01 00 05 00 0A 00 64" if self._is_can else "NO DATA",
             "0902": "014\r0: 49 02 01 4A 54 44\r1: 4B 42 32 30 55 30 30\r2: 31 32 33 34 35 36 37",

@@ -1211,6 +1211,9 @@ class PrototypeIdeasTest(unittest.TestCase):
         self.assertEqual((m6["21"]["value"], m6["21"]["min"], m6["21"]["max"]), (5, 10, 100))
         self.assertFalse(m6["21"]["passed"])
         self.assertEqual(m6["21"]["name"], "触媒 B1")
+        # 符号付きの値（UASID 80 以上）。2026-10-30 Nワゴンで不合格と誤って出た
+        self.assertEqual((m6["35"]["value"], m6["35"]["min"], m6["35"]["max"]), (-160, -1000, 1000))
+        self.assertTrue(m6["35"]["passed"])
 
     def test_mode06_skipped_on_kline(self):
         from obd_scanner.scan import read_mode06

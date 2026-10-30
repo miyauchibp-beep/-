@@ -290,6 +290,10 @@ def read_mode06(elm, max_mids=40):
                 if rec[0] != mid:
                     break
                 value, low, high = (rec[3] << 8 | rec[4]), (rec[5] << 8 | rec[6]), (rec[7] << 8 | rec[8])
+                if rec[2] >= 0x80:
+                    # UASID 80 以上は符号付きの値。2026-10-30 Nワゴン: VVT が「値 65376、範囲 64536〜1000」
+                    # （実際は -160、範囲 -1000〜1000 で合格）と読まれ、不合格と誤って出た
+                    value, low, high = (x - 0x10000 if x >= 0x8000 else x for x in (value, low, high))
                 results.append({
                     "mid": f"{mid:02X}", "name": MODE06_NAMES.get(mid, f"MID {mid:02X}"),
                     "tid": f"{rec[1]:02X}", "uasid": f"{rec[2]:02X}",
