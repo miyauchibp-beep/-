@@ -24,6 +24,8 @@ CAN_PROTOCOLS = {"6", "7", "8", "9"}
 # CAN でエンジン ECU だけに問い合わせるヘッダ（11bit: 7E0、29bit: DA10F1）と、全 ECU 宛て（既定）のヘッダ
 ENGINE_HEADER = {"6": "7E0", "8": "7E0", "7": "DA10F1", "9": "DA10F1"}
 BROADCAST_HEADER = {"6": "7DF", "8": "7DF", "7": "DB33F1", "9": "DB33F1"}
+# エンジン ECU が返す応答の ID（受信フィルタ ATCRA に使う）
+ENGINE_REPLY_ID = {"6": "7E8", "8": "7E8", "7": "18DAF110", "9": "18DAF110"}
 
 # トヨタの古い K-line 車（アレックス NZE121 など）: 宛先 13・9600bps・ヘッダ 81 13 F1。
 # Car Scanner の「Toyota OBD-II / EOBD」プロファイルが実際に送っている組み合わせ（2026-10-02 のログで確認）
@@ -152,7 +154,7 @@ class Elm327:
         self.protocol = ""
         self.protocol_name = ""
         self.generic_obd = False
-        self.engine_only = False  # CAN でエンジン ECU だけに問い合わせている
+        self.engine_focus = None  # CAN でエンジン ECU の応答だけを使う方法（"header" / "filter"）
         # 送受信の記録先（command, reply を受け取る関数）。不具合の調査用
         self.log = None
 
@@ -225,38 +227,60 @@ class Elm327:
             )
         self.protocol = self.send_raw("ATDPN", timeout=3).strip(" \r\n>").lstrip("A")
         self.protocol_name = PROTOCOLS.get(self.protocol, f"不明 ({self.protocol})")
-        self.engine_only = False
+        self.engine_focus = None
         if self.generic_obd and self.is_can and len(messages) > 1:
             self._focus_engine()
 
     def _focus_engine(self):
-        """CAN でミッション ECU なども答える車は、エンジン ECU だけに問い合わせる。
+        """CAN でミッション ECU なども答える車は、エンジン ECU の応答だけを使う。
 
         2026-10-29 バネット（マツダ L8）: 2 つの ECU が答え、応答の順番が毎回入れ替わるため、
         対応 PID・ライブデータ・較正 ID に別の ECU の値が混ざった。
-        エンジン宛てで答えなければ、全 ECU 宛てに戻す。故障コードは all_ecus() で全 ECU から読む。
+        まずエンジン宛てに送る（ATSH）。2026-10-30 フリード GB3（29bit）はこれに答えなかったので、
+        次に全 ECU 宛てのまま、エンジンの応答だけを受け取る（受信フィルタ ATCRA）。
+        どちらでも 1 つにならなければ、全 ECU の応答のまま。故障コードは all_ecus() で全 ECU から読む。
         """
-        self.send_raw(f"ATSH{ENGINE_HEADER[self.protocol]}", timeout=3)
-        try:
-            replies = self.query(0x01, 0x00)
-        except ObdError:
-            replies = []
-        if len(replies) == 1:
-            self.engine_only = True
+        for method in ("header", "filter"):
+            self._apply_focus(method)
+            try:
+                replies = self.query(0x01, 0x00)
+            except ObdError:
+                replies = []
+            # エンジン ECU は PID 03（燃料系統の状態）に対応している。ミッションは対応しない
+            if len(replies) == 1 and replies[0] and replies[0][0] & 0x20:
+                self.engine_focus = method
+                return
+            self._undo_focus(method)
+
+    def _apply_focus(self, method):
+        if method == "header":
+            self.send_raw(f"ATSH{ENGINE_HEADER[self.protocol]}", timeout=3)
         else:
+            self.send_raw(f"ATCRA{ENGINE_REPLY_ID[self.protocol]}", timeout=3)
+
+    def _undo_focus(self, method):
+        if method == "header":
             self.send_raw(f"ATSH{BROADCAST_HEADER[self.protocol]}", timeout=3)
+        else:
+            self.send_raw("ATAR", timeout=3)  # 受信フィルタを自動に戻す
+
+    @property
+    def engine_only(self):
+        """CAN でエンジン ECU の応答だけを使っている。"""
+        return self.engine_focus is not None
 
     @contextmanager
     def all_ecus(self):
-        """この中では全 ECU に問い合わせる（故障コードはミッションなどからも読むため）。"""
-        if not self.engine_only:
+        """この中では全 ECU の応答を使う（故障コードはミッションなどからも読むため）。"""
+        method = self.engine_focus
+        if method is None:
             yield
             return
-        self.send_raw(f"ATSH{BROADCAST_HEADER[self.protocol]}", timeout=3)
+        self._undo_focus(method)
         try:
             yield
         finally:
-            self.send_raw(f"ATSH{ENGINE_HEADER[self.protocol]}", timeout=3)
+            self._apply_focus(method)
 
     def query(self, mode, pid=None, timeout=None):
         """OBD2 要求を送り、ECU ごとの応答データ（モード/PID 以降）を返す。"""

@@ -11,7 +11,7 @@ import re
 class FakeElm327:
     def __init__(self, vehicle_protocol="4", needs_kw0=True, dtcs=("P0301", "P0420"),
                  init_address="33", generic_obd=True, init_baud="10", hybrid=False,
-                 second_ecu=False):
+                 second_ecu=False, physical_header_ok=True):
         """init_address: ECU が返事をする初期化アドレス（国内独自の車は 33 以外）
         generic_obd: False なら共通規格（01/03）に答えず、KWP の 1A/21 だけ答える"""
         self.vehicle_protocol = vehicle_protocol
@@ -21,6 +21,8 @@ class FakeElm327:
         self.generic_obd = generic_obd
         # True ならミッション ECU も答える（CAN で全 ECU 宛てのとき。バネットの再現）
         self.second_ecu = second_ecu
+        # False ならエンジン宛て（ATSH7E0 / DA10F1）に答えない（2026-10-30 フリード GB3 の再現）
+        self.physical_header_ok = physical_header_ok
         self.hybrid = hybrid     # True なら燃料の種類（PID 51）とハイブリッドバッテリー残量（PID 5B）に答える
         self.dtcs = list(dtcs)
         self.engine_running = True
@@ -43,6 +45,7 @@ class FakeElm327:
         self.iia = "33"
         self.iib = "10"
         self.header = "C133F1"
+        self.cra = ""  # 受信フィルタ（ATCRA）
 
     # シリアルポートと同じ read/write を持つ
     def write(self, data):
@@ -86,6 +89,10 @@ class FakeElm327:
             self.iia = arg[3:]
         elif arg.startswith("IB"):
             self.iib = arg[2:]
+        elif arg.startswith("CRA"):
+            self.cra = arg[3:]
+        elif arg == "AR":
+            self.cra = ""
         elif arg.startswith("SH"):
             self.header = arg[2:]
         elif arg.startswith("SP"):
@@ -181,7 +188,10 @@ class FakeElm327:
                 reply = "\r".join(lines) if lines else "43 00 00 00 00 00 00"
         else:
             reply = table.get(cmd, "NO DATA")
-        if self.second_ecu and self._is_can and self.header not in ("7E0", "DA10F1"):
+        engine_header = self.header in ("7E0", "DA10F1")
+        if engine_header and not self.physical_header_ok:
+            return "NO DATA"
+        if self.second_ecu and self._is_can and not engine_header and self.cra not in ("7E8", "18DAF110"):
             # ミッション ECU の応答。バネットの実車と同じく、エンジンより先に返ることがある
             tcm = {"0100": "41 00 98 1C 80 11", "0101": "41 01 00 04 00 00", "0105": "41 05 4C",
                    "03": "43 01 07 31", "07": "47 00",  # ミッションに P0731

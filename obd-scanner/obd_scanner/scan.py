@@ -219,9 +219,13 @@ def full_scan(elm, trend_seconds=10.0):
     report["supported_pids"] = [f"{p:02X}" for p in supported]
     report["vin"] = mask_vin(read_vin(elm))
     report["calibration_id"] = read_calibration_id(elm)
-    status = elm.query(0x01, 0x01) if 0x01 in supported else []
-    if status and status[0]:
-        report["status"] = pids.decode_monitor_status(status[0])
+    status = [b for b in (elm.query(0x01, 0x01) if 0x01 in supported else []) if b]
+    if status:
+        # 複数の ECU が答えたら、対応しているモニタが一番多いもの（エンジン ECU）を使う。
+        # 2026-10-30 フリード GB3: ミッションの「包括部品だけ」が先に返り、レディネスを読み違えた
+        def monitors(b):
+            return bin(b[1] & 0x07).count("1") + bin(b[2]).count("1") if len(b) >= 3 else 0
+        report["status"] = pids.decode_monitor_status(max(status, key=monitors))
     report["dtcs"] = read_dtcs(elm)
     # PID 02（記録の原因 DTC）はモード 02 専用で、モード 01 の対応一覧には出ないので常に試す
     report["freeze_frame"] = read_freeze_frame(elm)

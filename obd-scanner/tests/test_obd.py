@@ -515,6 +515,40 @@ class RealSolioTest(unittest.TestCase):
         self.assertNotIn("012E", fake.sent)      # 対応していない項目は読まない
 
 
+class RealFreedTest(unittest.TestCase):
+    """2026-10-30 ホンダ フリード GB3（CAN 29bit、エンジンとミッションの 2 つの ECU）。
+    エンジン宛て（ATSHDA10F1）に答えなかったので、全 ECU の応答が混ざったまま読んだ。"""
+    DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+    def test_readiness_from_engine_ecu(self):
+        from obd_scanner.scan import full_scan
+        elm = Elm327(ReplayAdapter(os.path.join(self.DATA, "freed_gb3_raw_20261030.txt"), sequential=True))
+        with self.assertRaises(ObdError):
+            elm.connect(protocol="6")
+        elm.connect(protocol="0")
+        r = full_scan(elm, trend_seconds=0)
+        names = [n for n, _ in r["status"]["monitors"]]
+        # ミッションの「41 01 00 04 00 00」（包括部品だけ）ではなく、エンジンの方を使う
+        self.assertIn("触媒", names)
+        self.assertIn("EGR/VVT", names)
+        self.assertEqual(len(r["mode06"]), 15)
+
+    def test_receive_filter_when_physical_header_fails(self):
+        from obd_scanner.scan import full_scan
+        fake = FakeElm327(vehicle_protocol="7", needs_kw0=False, dtcs=("P0420",), second_ecu=True,
+                          physical_header_ok=False)
+        elm = Elm327(fake)
+        elm.connect()
+        self.assertEqual(elm.engine_focus, "filter")
+        self.assertIn("ATSHDA10F1", fake.sent)       # まずエンジン宛てを試し
+        self.assertIn("ATCRA18DAF110", fake.sent)    # 答えないので受信フィルタに切り替える
+        r = full_scan(elm, trend_seconds=0)
+        codes = sorted(d["code"] for d in r["dtcs"]["stored"])
+        self.assertEqual(codes, ["P0420", "P0731"])  # 故障コードはフィルタを外して全 ECU から
+        i = fake.sent.index("03")
+        self.assertEqual((fake.sent[i - 1], fake.sent[i + 1]), ("ATAR", "ATCRA18DAF110"))
+
+
 class AfSensorTest(unittest.TestCase):
     def test_pid34_lambda(self):
         # バネット（マツダ L8）は PID 14 がなく、PID 34（A/F センサ）に対応
