@@ -1157,6 +1157,19 @@ class PrototypeIdeasTest(unittest.TestCase):
             self.assertIn("2026-10-30,", text)
 
 
+class ZipContentsTest(unittest.TestCase):
+    def test_zip_has_every_module(self):
+        # 2026-10-30: checks.py を ZIP に入れ忘れ、店の PC で起動できなかった
+        import glob
+        import make_zip
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        files = set(make_zip.FILES + make_zip.package_files())
+        for path in glob.glob(os.path.join(root, "obd_scanner", "*.py")):
+            self.assertIn("obd_scanner/" + os.path.basename(path), files)
+        for script in ("obd_scan.py", "record_result.py", "kline_init_test.py"):
+            self.assertIn(script, files)
+
+
 class BatFileTest(unittest.TestCase):
     def test_bat_is_ascii_with_crlf(self):
         # LF 改行や日本語が入ると、cmd.exe がコマンドを読み違える

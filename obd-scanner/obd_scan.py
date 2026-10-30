@@ -34,7 +34,8 @@ try:
     from obd_scanner.scan import (full_scan, hold_rpm_guided, is_hybrid, measure_running, read_coolant,
                                   read_live, read_rpm, record_cranking, record_free, supported_pids,
                                   warmup_sample)
-except ImportError:
+except ImportError as e:
+    print(f"読み込めないファイルがあります（{e}）。")
     print("obd_scanner フォルダが見つかりません。obd_scan.py と同じ場所にフォルダごとコピーしてください。")
     if os.name == "nt":
         input("\nEnter キーを押すと閉じます...")

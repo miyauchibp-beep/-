@@ -16,7 +16,8 @@ try:
     from obd_scanner.cases import (VERDICTS, hit_rate, make_case, recent_diags, save_case, scan_for,
                                    write_csv)
     from obd_scanner.console import run_from_console
-except ImportError:
+except ImportError as e:
+    print(f"読み込めないファイルがあります（{e}）。")
     print("obd_scanner フォルダが見つかりません。record_result.py と同じ場所にフォルダごとコピーしてください。")
     if os.name == "nt":
         input("\nEnter キーを押すと閉じます...")

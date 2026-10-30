@@ -1,5 +1,6 @@
 """PC に配る ZIP（dist/OBD_TEST.zip）を作る。展開すると OBD_TEST フォルダ 1 つになる。"""
 
+import glob
 import os
 import zipfile
 
@@ -12,15 +13,6 @@ FILES = [
     "run_result.bat",
     "kline_init_test.py",
     "run_kline_test.bat",
-    "obd_scanner/__init__.py",
-    "obd_scanner/elm327.py",
-    "obd_scanner/pids.py",
-    "obd_scanner/dtc.py",
-    "obd_scanner/simulator.py",
-    "obd_scanner/scan.py",
-    "obd_scanner/console.py",
-    "obd_scanner/ai_diag.py",
-    "obd_scanner/cases.py",
     # PC の Claude Code で作業を続けるための経緯・構想メモ
     "HANDOFF.md",
     "APP_SPEC.md",
@@ -82,11 +74,17 @@ COM4 / COM5（スナップオン）は使いません。
 """
 
 
+def package_files():
+    """obd_scanner フォルダの .py は全部入れる（入れ忘れると起動できない。2026-10-30 に checks.py で起きた）。"""
+    return sorted(os.path.relpath(p, HERE).replace(os.sep, "/")
+                  for p in glob.glob(os.path.join(HERE, "obd_scanner", "*.py")))
+
+
 def main():
     os.makedirs(os.path.join(HERE, "dist"), exist_ok=True)
     out = os.path.join(HERE, "dist", "OBD_TEST.zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in FILES:
+        for f in FILES + package_files():
             z.write(os.path.join(HERE, f), "OBD_TEST/" + f)
         # Windows のメモ帳で文字化けしないよう BOM 付き UTF-8・CRLF にする
         z.writestr("OBD_TEST/README.txt", "﻿" + README.replace("\n", "\r\n"))
