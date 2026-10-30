@@ -37,6 +37,13 @@ def _freeze_query(elm, pid, frame=0):
     return results
 
 
+def mask_vin(vin):
+    """車台番号は下 4 桁だけ残す（お客様の車を特定できないように。仲間に配る前提の決まり）。"""
+    if not vin:
+        return vin
+    return "*" * max(len(vin) - 4, 0) + vin[-4:]
+
+
 def read_vin(elm):
     """モード 09 PID 02 で車台番号を読む。読めなければ None。
 
@@ -210,7 +217,7 @@ def full_scan(elm, trend_seconds=10.0):
         return report
     supported = supported_pids(elm)
     report["supported_pids"] = [f"{p:02X}" for p in supported]
-    report["vin"] = read_vin(elm)
+    report["vin"] = mask_vin(read_vin(elm))
     report["calibration_id"] = read_calibration_id(elm)
     status = elm.query(0x01, 0x01) if 0x01 in supported else []
     if status and status[0]:

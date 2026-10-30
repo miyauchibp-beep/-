@@ -75,7 +75,7 @@ PC からだと `BUS INIT: ...ERROR` になり ECU に繋がりません（ス�
 車台番号・警告灯・レディネス・故障コード（現在／保留中／消去不可）・フリーズフレーム・ライブデータを読み、
 `scan_logs\scan_日時.json` に保存します。
 
-続けて車両情報と症状を聞き、Claude（`claude-opus-5-5`）に原因候補（可能性順）・確認手順・修理方法を出させて
+続けて車両情報と症状を聞き、Claude（既定 `claude-sonnet-5-5`、`--model claude-opus-5-5` で Opus）に原因候補（可能性順）・確認手順・修理方法を出させて
 `scan_logs\diag_日時.md` に保存します。
 
 - API キーは環境変数 `ANTHROPIC_API_KEY`（Windows: `setx ANTHROPIC_API_KEY "sk-ant-..."` のあと画面を開き直す）

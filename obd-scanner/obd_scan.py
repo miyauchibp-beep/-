@@ -222,7 +222,7 @@ def remember_vehicle(key, vehicle):
         pass
 
 
-def run_ai(report, stamp, report_path=None, scan_name=None, prompt_only=False):
+def run_ai(report, stamp, report_path=None, scan_name=None, prompt_only=False, model=None):
     """車両情報・症状を聞いて Claude に診断させ、Markdown で保存する。
 
     prompt_only なら API を使わず、チャットに貼る文（prompt_日時.txt）だけ作る（API 代なし）。
@@ -266,7 +266,7 @@ def run_ai(report, stamp, report_path=None, scan_name=None, prompt_only=False):
     print("\nClaude が診断しています...\n")
     try:
         text = diagnose(report, vehicle, symptom, on_text=lambda t: print(t, end="", flush=True),
-                        past_cases=past)
+                        past_cases=past, **({"model": model} if model else {}))
     except AiDiagError as e:
         print(f"診断できませんでした: {e}")
         return
@@ -606,6 +606,7 @@ def main(argv=None):
                     help="--live で見る項目を絞る（例: 15 や 15,14,0C。o2 で O2 センサ 2 つと回転数）。少ないほど速く更新")
     ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
     ap.add_argument("--no-ai", action="store_true", help="Claude による診断をしない")
+    ap.add_argument("--model", help="診断に使う Claude のモデル（既定 claude-sonnet-5-5。難しい車は claude-opus-5-5）")
     ap.add_argument("--prompt-only", action="store_true",
                     help="API を使わず、claude.ai のチャットに貼る文（scan_logs/prompt_日時.txt）だけ作る")
     ap.add_argument("--single", action="store_true",
@@ -632,7 +633,8 @@ def main(argv=None):
         report.pop("ai_diagnosis", None)
         print_report(report)
         report["auto_checks"] = auto_checks(report)
-        run_ai(report, stamp, scan_name=os.path.basename(args.from_scan), prompt_only=args.prompt_only)
+        run_ai(report, stamp, scan_name=os.path.basename(args.from_scan), prompt_only=args.prompt_only,
+               model=args.model)
         return 0
 
     demo_fake = None
@@ -657,8 +659,10 @@ def main(argv=None):
     # 車とのやり取りをすべて記録する（読み取れない項目があったときの調査用）
     raw_path = os.path.join("scan_logs", f"raw_{stamp}.txt")
     raw_file = open(raw_path, "w", encoding="utf-8")
+    # 車台番号（0902）の応答は記録しない（下 4 桁だけ残す決まりのため）
     elm.log = lambda cmd, reply: raw_file.write(
-        f"> {cmd:<14} {' | '.join(x.strip() for x in reply.replace('>', '').splitlines() if x.strip())}\n")
+        f"> {cmd:<14} " + ("（車台番号は記録しない）" if cmd == "0902" else
+                           " | ".join(x.strip() for x in reply.replace(">", "").splitlines() if x.strip())) + "\n")
     print("車両に接続しています...")
     try:
         protocol, extra, reset, label = connect_any(elm, saved)
@@ -723,7 +727,7 @@ def main(argv=None):
     print(f"\n保存しました: {path}")
     print(f"通信の記録: {raw_path}")
     if not args.no_ai:
-        run_ai(report, stamp, report_path=path, prompt_only=args.prompt_only)
+        run_ai(report, stamp, report_path=path, prompt_only=args.prompt_only, model=args.model)
     return 0
 
 

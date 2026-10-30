@@ -141,7 +141,7 @@ class ScanTest(unittest.TestCase):
     def test_full_scan_on_can_car(self):
         from obd_scanner.scan import full_scan
         r = full_scan(self._connected(), trend_seconds=0)
-        self.assertEqual(r["vin"], "JTDKB20U001234567")
+        self.assertEqual(r["vin"], "*************4567")  # 下 4 桁だけ
         self.assertEqual(r["calibration_id"], "45410200")
         self.assertEqual([c["code"] for c in r["dtcs"]["stored"]], ["P0301", "P0420"])
         self.assertEqual(r["dtcs"]["pending"], [])
@@ -242,7 +242,7 @@ class AiDiagTest(unittest.TestCase):
         self.assertEqual(text, "## 見立て\n問題なし")
         self.assertEqual("".join(got), text)
         kw = client.calls[0]
-        self.assertEqual(kw["model"], "claude-opus-5-5")
+        self.assertEqual(kw["model"], "claude-sonnet-5-5")
         self.assertEqual(kw["fallbacks"], "default")
         self.assertEqual(kw["betas"], ["server-side-fallback-2026-07-01"])
         self.assertNotIn("thinking", kw)  # Opus 5.5 は thinking を無効にできない
@@ -353,7 +353,7 @@ class RealNwgnCrankTest(unittest.TestCase):
             elm.connect(protocol="6")   # 前回の設定（CAN 11bit）は NO DATA
         elm.connect(protocol="0")
         r = full_scan(elm, trend_seconds=0)
-        self.assertEqual(r["vin"], "JH1-1003971")
+        self.assertEqual(r["vin"], "*******3971")
         self.assertEqual(r["calibration_id"], "37805-5Z1-J760U")
         self.assertFalse(r["engine_running"])
         live = {v["pid"]: v["value"] for v in r["live"]}
@@ -419,7 +419,7 @@ class TwoEcuTest(unittest.TestCase):
             elm.connect(protocol="7")
         elm.connect(protocol="0")
         r = full_scan(elm, trend_seconds=0)
-        self.assertEqual(r["vin"], "SKP2MN101494")
+        self.assertEqual(r["vin"], "********1494")
         sup = r["supported_pids"]
         # 2 つの ECU の対応表を合わせる（以前はエンジンの 43〜4C や A/F センサの読み落としがあった）
         for pid in ("34", "43", "44", "49", "4C"):

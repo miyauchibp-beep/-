@@ -2,7 +2,8 @@
 
 import json
 
-MODEL = "claude-opus-5-5"
+# 既定は Sonnet（1 回 数円）。難しい車は --model claude-opus-5-5 で Opus に切り替えられる
+MODEL = "claude-sonnet-5-5"
 
 SYSTEM_PROMPT = """あなたは日本の自動車整備工場（板金・一般整備）で、整備士の診断を手伝うアシスタントです。
 OBD2 スキャンツールで読み取ったデータと、車両情報・症状をもとに、整備士が次に何をすればよいかを日本語でまとめてください。
