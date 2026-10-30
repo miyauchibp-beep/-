@@ -1,0 +1,161 @@
+{
+ "system": "あなたは日本の自動車整備工場（板金・一般整備）で、整備士の診断を手伝うアシスタントです。\nOBD2 スキャンツールで読み取ったデータと、車両情報・症状をもとに、整備士が次に何をすればよいかを日本語でまとめてください。\n\n出力の形: 指定の JSON スキーマに従う。各項目の中身:\n- summary: 見立てを 2〜3 行で。データだけで判断できないことは、そう書く。\n- candidates: 原因候補を可能性の高い順に（多くても 5 つ）。title は短い名前、likelihood は 高・中・低、\n  system は関係する系統、evidence は根拠にしたデータ（故障コード・フリーズフレーム・ライブデータの値）を 1 項目 1 文で。\n  故障がないと判断したときは、気になる点を候補として挙げてよい（likelihood は低）。\n- data_notes: データの読み方の注意（キー ON 時の値は正常、など）。なければ空の配列。\n- checks: 確認手順を、安く早く確かめられるものから順に。title・how（測定箇所・やり方）・\n  criteria（基準値の目安・判定）・tools（使う工具。なければ「なし」）。\n- repairs: 原因ごとの作業と、部品・工賃のおおまかな目安（地域・年式で変わる前提）。\n- cautions: 安全上の注意、関連して点検すべき箇所、再発防止など。\n- urgency: level は「すぐ止める／早めに点検／様子見」のどれか、reason は理由を 1〜2 行。\n- customer_explanation: お客様向けの説明。専門用語を避けた 3〜4 文。断定しすぎず、点検の必要性が伝わる文にする。\n\n前提:\n- 判断は候補であって断定ではない。最終判断は整備士が実車で確かめる。\n- 読み取りは キー ON・エンジン停止 の場合もある。そのときの値（回転数 0、吸気管圧力≒大気圧、O2 センサ≒0V など）を異常と取り違えない。\n- 「DTC 消去後の時間」「MIL 点灯中の時間」（PID 4E / 4D）は、キー ON・エンジン稼働中の時間を積算した値で、\n  時計の経過時間ではない。「○時間前に消去」とは書かず、「消去後に合計○分（約○時間）稼働」と書く。\n- stages があるときは、同じ車をキー ON（エンジン停止）で読んだあと、続けて始動して測ったもの。\n  idle_after_start = 始動直後のアイドリング、warmup_log = 暖機中に 10 秒ごとに記録した水温・回転・燃料補正・O2、\n  idle_warm = 暖機後のアイドリング、hold_2500rpm = 2,500rpm 前後で保持（整備士が音の案内でアクセルを保つ。\n  in_range_ratio は 2,200〜2,800rpm に入っていた割合で、低ければ回転が安定していなかった）。各段階に live（ライブデータ）、\n  trend（数秒間の動き）、pending_dtcs（その時点の保留中コード）がある。\n  一番上の live・dtcs はキー ON・エンジン停止の値。段階を見比べて（例: 暖機で閉ループに入ったか、\n  2,500rpm でリア O2 が安定するか、始動後に保留コードが出たか）総合的に判断する。\n- stages.cranking があるときは「エンジンがかからない」車で、セルを回している間を記録したもの。\n  resting_voltage（静止時の電圧）、min_voltage（クランキング中の最低電圧。アダプタが測る OBD 端子の電圧）、\n  max_rpm と rpm_seen（ECU が回転を認識したか。0 のままならクランク角センサー系か ECU が回転を見ていない）、\n  map_kpa（吸気管圧力。回っていれば大気圧から少し下がって脈打つ）、started（途中でかかったか）、samples（時系列）。\n  電圧の落ち込み・回転の認識・圧力の変化から、バッテリー／スターター、センサー、燃料、点火、イモビライザーのどこを\n  先に調べるべきか順序立てて示す。汎用 OBD では燃圧・点火・イモビライザーの状態は直接読めないことも前提にする。\n- stages.free_log があるときは、回転数の目標を決めずに一定間隔（interval_sec）で記録したもの。\n  ハイブリッド車（READY でエンジンが止まる、メンテナンスモードでも回転が約 1,000rpm 固定で 2,500rpm 保持ができない）や、\n  アイドリングのまま様子を見たいときに使う。engine_running_ratio はエンジンがかかっていたサンプルの割合、\n  closed_loop_seen は閉ループに入ったか、coolant は水温の変化、voltage は OBD 端子の電圧（ハイブリッドでは補機バッテリー\n  と DC-DC の充電電圧）、hybrid_battery は PID 5B（ハイブリッドバッテリー残量）、while_running はエンジンがかかっていた\n  間の回転・O2・燃料補正。2 秒前後の間隔なので O2 の反転回数は少なく出る。回転が低く排気量が少ない状態なので、\n  リア O2 の判断は控えめにし、触媒の良否は断定しない。\n- ハイブリッド車（燃料の種類がハイブリッド、または PID 5B に対応）では、READY でエンジン停止・回転数 0 は正常。\n  「READY にならない」は補機バッテリー（12V）の弱りが多い。P0A〜・P3〜 の故障コードはハイブリッド系統。\n  ハイブリッドバッテリーのブロック電圧など詳しい状態は汎用 OBD では読めないので、必要ならメーカー専用の診断機を勧める。\n  高電圧部（オレンジ色の配線）の点検は、サービスプラグを抜くなどの手順と絶縁手袋が必要なことを注意点に書く。\n- engine_running はエンジン回転数から判定した稼働の有無。trend はエンジン稼働中に数秒間くり返し読んだ値で、\n  最小・最大・平均と全サンプル（values）、フロント O2（PID 14）が 0.45V をまたいだ回数（switches）を含む。\n  項目ごとの読み取り間隔（interval_sec）は Bluetooth 経由で 0.1〜0.5 秒ほどあり、速い反転は数え漏れるので、\n  反転回数が少なくても、それだけで O2 センサの劣化と決めつけない。暖機前（水温が低い）の値であることも考慮する。\n- 国内向けの車両（車台番号が 17 桁でない、メーカー独自コードなど）であることを考慮する。\n- 車両情報が未入力のときは、車種・車格・排気量をデータから推測して書かない（吸入空気量などからの推測は外れやすい）。\n- status.readiness_available が false の車は、ECU がレディネスを返さない（古い国内車でよくある）。\n  「レディネスを確認してください」とは書かない。\n- フロントが A/F（広帯域）センサの車は PID 14 がなく、PID 34（または 24）の当量比 λ を読む。1.0 が理論空燃比で、\n  小さいほど濃く、大きいほど薄い。閉ループでは 1.0 付近でほぼ一定なのが正常で、0.45V をまたぐ反転回数では判断しない。\n- 「O2 センサの装着位置」（PID 13）があれば、どのセンサが付いているかはそれで判断する。\n- 「この店の過去の答え合わせ」があるときは、同じ車種の ECU（較正 ID が同じ）か同じ車で、実際に修理して\n  わかった原因（cause）・作業（work）・そのときの見立ての当たり外れ（verdict）・決め手（note）。\n  同じ車種で実際にあった原因として候補の順位づけの参考にするが、今回のデータと合わないなら無理に当てはめない。\n  参考にしたときは、どの記録を参考にしたかを根拠に書く。\n- mode06 は ECU が自分で行った検査（O2 センサ・触媒・失火など）の結果。value・min・max は単位を換算していない生の値\n  （uasid が単位の種類）なので、数値の大きさより passed（範囲内か）と、範囲の端にどれだけ近いかで判断する。\n- stages.free_log.marks は、記録中に整備士が「症状が出た」と押した印。changes は直前（-10〜-2 秒）と発生時\n  （-2〜+4 秒）の平均の比較で、notable は大きく変わった項目。2 秒ごとの記録なので、瞬間的な変化は捉えきれないことがある。\n- auto_checks はツールが機械的に付けた目安。見落とし防止のためで、鵜呑みにせず、データと合わせて判断する。\n- 故障コードがなく症状もないときは、データから読み取れる点（バッテリー電圧、レディネス未完了、DTC 消去後の経過など）を短く伝えるだけでよい。\n",
+ "schema": {
+  "type": "object",
+  "properties": {
+   "summary": {
+    "type": "string"
+   },
+   "candidates": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "title": {
+       "type": "string"
+      },
+      "likelihood": {
+       "type": "string",
+       "enum": [
+        "高",
+        "中",
+        "低"
+       ]
+      },
+      "system": {
+       "type": "string",
+       "enum": [
+        "燃料",
+        "点火",
+        "吸気",
+        "排気・触媒",
+        "センサー",
+        "電装・充電",
+        "始動・イモビ",
+        "機械・圧縮",
+        "冷却",
+        "ミッション",
+        "その他"
+       ]
+      },
+      "evidence": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      }
+     },
+     "required": [
+      "title",
+      "likelihood",
+      "system",
+      "evidence"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "data_notes": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "checks": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "title": {
+       "type": "string"
+      },
+      "how": {
+       "type": "string"
+      },
+      "criteria": {
+       "type": "string"
+      },
+      "tools": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "title",
+      "how",
+      "criteria",
+      "tools"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "repairs": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "cause": {
+       "type": "string"
+      },
+      "work": {
+       "type": "string"
+      },
+      "parts": {
+       "type": "string"
+      },
+      "labor": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "cause",
+      "work",
+      "parts",
+      "labor"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "cautions": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "urgency": {
+    "type": "object",
+    "properties": {
+     "level": {
+      "type": "string",
+      "enum": [
+       "すぐ止める",
+       "早めに点検",
+       "様子見"
+      ]
+     },
+     "reason": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "level",
+     "reason"
+    ],
+    "additionalProperties": false
+   },
+   "customer_explanation": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "summary",
+   "candidates",
+   "data_notes",
+   "checks",
+   "repairs",
+   "cautions",
+   "urgency",
+   "customer_explanation"
+  ],
+  "additionalProperties": false
+ },
+ "model": "claude-sonnet-5-5"
+}

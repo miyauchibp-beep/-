@@ -1,0 +1,5 @@
+# 一覧を見せない。Authorization ヘッダーを PHP に渡す（共有サーバーで消えることがあるため）
+Options -Indexes
+RewriteEngine On
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]

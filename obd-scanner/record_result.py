@@ -15,7 +15,9 @@ import sys
 try:
     from obd_scanner.cases import (VERDICTS, hit_rate, make_case, recent_diags, save_case, scan_for,
                                    verdict_from_rank, write_csv)
+    from obd_scanner.ai_diag import AiDiagError
     from obd_scanner.console import run_from_console
+    from obd_scanner.remote import load_server, remote_answer
 except ImportError as e:
     print(f"読み込めないファイルがあります（{e}）。")
     print("obd_scanner フォルダが見つかりません。record_result.py と同じ場所にフォルダごとコピーしてください。")
@@ -86,6 +88,14 @@ def main():
     save_case(case, md_path=diag["path"])
     write_csv()
     print(f"\n記録しました: scan_logs\\cases.jsonl と {os.path.basename(diag['path'])}")
+    server = load_server()
+    if server and diag.get("server_scan_id"):
+        # 中継サーバー経由の診断なら、答え合わせもサーバーに送る（仲間の次の診断に使われる）
+        try:
+            remote_answer(server, diag["server_scan_id"], cause, work, hit_rank, note)
+            print("中継サーバーにも記録しました。")
+        except AiDiagError as e:
+            print(f"中継サーバーには送れませんでした（PC には記録済み）: {e}")
     print("一覧（Excel で開けます）: scan_logs\\cases.csv")
     if case["calibration_id"]:
         print(f"同じ較正 ID（{case['calibration_id']}）の車を診断するとき、Claude に参考として渡します。")

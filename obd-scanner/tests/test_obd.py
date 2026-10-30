@@ -1430,6 +1430,93 @@ class PrototypeIdeasTest(unittest.TestCase):
             self.assertIn("2026-10-30,", text)
 
 
+class RelayServerClientTest(unittest.TestCase):
+    """PC 版から中継サーバー（server/）経由で診断・答え合わせを送る。サーバーは同じ約束で答える偽物。"""
+
+    def _serve(self):
+        import http.server
+        import threading
+        received = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])).decode("utf-8"))
+                received.append((self.path, self.headers["Authorization"], body))
+                if self.headers["Authorization"] != "Bearer key-1":
+                    status, res = 401, {"error": "鍵が正しくないか、使えなくなっています"}
+                elif self.path.endswith("diagnose.php"):
+                    status, res = 200, {"scan_id": 7, "diagnosis": SAMPLE_DIAGNOSIS, "past_cases": 1}
+                else:
+                    status, res = 200, {"answer_id": 1}
+                data = json.dumps(res, ensure_ascii=False).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_port}", received
+
+    def test_diagnose_and_answer_through_server(self):
+        import obd_scan
+        import record_result
+        from unittest import mock
+        url, received = self._serve()
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("scan_logs")
+                with open("server.json", "w", encoding="utf-8") as f:
+                    json.dump({"url": url, "token": "key-1"}, f)
+                answers = iter(["", "ホンダ Nワゴン", "失火"])
+                with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}), \
+                        mock.patch.object(obd_scan, "diagnose", lambda *a, **kw: self.fail("直接は呼ばない")), \
+                        mock.patch.object(obd_scan, "ask", lambda prompt: next(answers)), \
+                        contextlib.redirect_stdout(io.StringIO()) as out:
+                    obd_scan.run_ai({"calibration_id": "X", "ai_diagnosis": {"text": "古い"}}, "20261030_210000")
+                self.assertIn("中継サーバー経由", out.getvalue())
+                path, auth, body = received[0]
+                self.assertEqual((path, auth), ("/diagnose.php", "Bearer key-1"))
+                self.assertEqual((body["vehicle"], body["symptom"], body["client"]), ("ホンダ Nワゴン", "失火", "pc"))
+                self.assertNotIn("ai_diagnosis", body["report"])
+                with open(os.path.join("scan_logs", "diag_20261030_210000.json"), encoding="utf-8") as f:
+                    self.assertEqual(json.load(f)["server_scan_id"], 7)
+                with open(os.path.join("scan_logs", "diag_20261030_210000.md"), encoding="utf-8") as f:
+                    self.assertIn("## 原因候補（可能性の高い順）", f.read())
+
+                # 答え合わせもサーバーに送る
+                answers = iter(["", "プラグ摩耗", "プラグ交換", "2", "電極が丸い"])
+                with mock.patch.object(record_result, "ask", lambda prompt: next(answers)), \
+                        contextlib.redirect_stdout(io.StringIO()) as out:
+                    record_result.main()
+                self.assertIn("中継サーバーにも記録しました", out.getvalue())
+                path, _, body = received[1]
+                self.assertEqual(path, "/answer.php")
+                self.assertEqual((body["scan_id"], body["hit_rank"], body["cause"]), (7, 2, "プラグ摩耗"))
+            finally:
+                os.chdir(cwd)
+
+    def test_server_error_message_is_shown(self):
+        from obd_scanner.ai_diag import AiDiagError
+        from obd_scanner.remote import remote_diagnose
+        url, _ = self._serve()
+        with self.assertRaises(AiDiagError) as cm:
+            remote_diagnose({"url": url, "token": "wrong"}, {})
+        self.assertIn("鍵が正しくない", str(cm.exception))
+
+    def test_server_prompt_is_up_to_date(self):
+        # ai_diag.py を直したら make_server_prompt.py で server/src/prompt.json を作り直す
+        import make_server_prompt
+        with open(make_server_prompt.PATH, encoding="utf-8") as f:
+            self.assertEqual(json.load(f), json.loads(json.dumps(make_server_prompt.build())))
+
+
 class ZipContentsTest(unittest.TestCase):
     def test_zip_has_every_module(self):
         # 2026-10-30: checks.py を ZIP に入れ忘れ、店の PC で起動できなかった

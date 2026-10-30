@@ -28,6 +28,7 @@ try:
     from obd_scanner import pids
     from obd_scanner.ai_diag import SYSTEM_PROMPT, AiDiagError, build_user_message, diagnose
     from obd_scanner.checks import auto_checks
+    from obd_scanner.remote import load_server, remote_diagnose
     from obd_scanner.cases import similar_cases
     from obd_scanner.console import ask_port, remember_port, run_from_console
     from obd_scanner.elm327 import KNOWN_SETTINGS, Elm327, ObdError
@@ -247,7 +248,7 @@ def run_ai(report, stamp, report_path=None, scan_name=None, prompt_only=False, m
         if ans.lower() in ("n", "no", "いいえ"):
             return
         prompt_only = ans.lower() == "p"
-        if not prompt_only and not os.environ.get("ANTHROPIC_API_KEY"):
+        if not prompt_only and not os.environ.get("ANTHROPIC_API_KEY") and not load_server():
             print("API キー（ANTHROPIC_API_KEY）が設定されていないので、チャットに貼る文を作ります。")
             prompt_only = True
     key = report.get("calibration_id") or report.get("vin")
@@ -258,7 +259,9 @@ def run_ai(report, stamp, report_path=None, scan_name=None, prompt_only=False, m
         vehicle = ask("車両（例: トヨタ bB QNC21 H28年 85000km）: ")
     remember_vehicle(key, vehicle)
     symptom = ask("症状・お客様の申告（例: アイドリングが不安定、警告灯が点いた）: ")
-    past = similar_cases(report)
+    server = None if prompt_only else load_server()
+    # サーバー経由のときは、サーバーが仲間の分も含めた事例を探して渡す
+    past = [] if server else similar_cases(report)
     if past:
         print(f"\n同じ車種の答え合わせが {len(past)} 件あるので、参考として Claude に渡します。")
     scan_name = scan_name or (os.path.basename(report_path) if report_path else "")
@@ -287,8 +290,12 @@ def run_ai(report, stamp, report_path=None, scan_name=None, prompt_only=False, m
         if received[0] // 400 > before:
             print("・", end="", flush=True)
     try:
-        result = diagnose(report, vehicle, symptom, on_text=progress,
-                          past_cases=past, **({"model": model} if model else {}))
+        if server:
+            print("（中継サーバー経由）", end="", flush=True)
+            result = remote_diagnose(server, report, vehicle, symptom)
+        else:
+            result = diagnose(report, vehicle, symptom, on_text=progress,
+                              past_cases=past, **({"model": model} if model else {}))
     except AiDiagError as e:
         print(f"\n診断できませんでした: {e}")
         return
@@ -304,7 +311,8 @@ def run_ai(report, stamp, report_path=None, scan_name=None, prompt_only=False, m
     if data is not None:
         # アプリや答え合わせで使う、決まった形の診断（候補の番号・緊急度など）
         with open(md_path[:-3] + ".json", "w", encoding="utf-8") as f:
-            json.dump({"vehicle": vehicle, "symptom": symptom, "scan": scan_name, "diagnosis": data},
+            json.dump({"vehicle": vehicle, "symptom": symptom, "scan": scan_name, "diagnosis": data,
+                       "server_scan_id": result.get("scan_id") if isinstance(result, dict) else None},
                       f, ensure_ascii=False, indent=2)
     if report_path:
         report["ai_diagnosis"] = {"vehicle": vehicle, "symptom": symptom, "text": text, "data": data}

@@ -3,3 +3,8 @@ working_init.json
 __pycache__/
 obd_port.txt
 vehicles.json
+scan_logs/
+server.json
+server/config.php
+server/vendor/
+dist/obd_server.zip

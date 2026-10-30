@@ -2,6 +2,7 @@
 
 import glob
 import os
+import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -91,5 +92,28 @@ def main():
     print(out)
 
 
+def server_zip():
+    """中継サーバーに上げる ZIP（dist/obd_server.zip）。展開すると obd-relay フォルダ 1 つになる。
+
+    vendor/（公式 PHP 部品）も入れるので、サーバーで composer を使わなくてよい。config.php は入れない。
+    """
+    root = os.path.join(HERE, "server")
+    if not os.path.isdir(os.path.join(root, "vendor")):
+        raise SystemExit("server/vendor がありません。server フォルダで composer install を実行してください")
+    out = os.path.join(HERE, "dist", "obd_server.zip")
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in (".git", "tests")]
+            for name in filenames:
+                path = os.path.join(dirpath, name)
+                rel = os.path.relpath(path, root).replace(os.sep, "/")
+                if rel == "config.php":
+                    continue  # API キー・パスワードは入れない
+                z.write(path, "obd-relay/" + rel)
+    print(out)
+
+
 if __name__ == "__main__":
     main()
+    if "--server" in sys.argv:
+        server_zip()

@@ -41,10 +41,13 @@ def read_diag(md_path):
             info[key] = m.group(1).strip()
     # 決まった形の診断（diag_日時.json）があれば、原因候補の名前を読む（答え合わせで番号を選ぶため）
     info["candidates"] = []
+    info["server_scan_id"] = None
     try:
         with open(md_path[:-3] + ".json", encoding="utf-8") as f:
-            data = json.load(f).get("diagnosis") or {}
+            saved = json.load(f)
+        data = saved.get("diagnosis") or {}
         info["candidates"] = [c["title"] for c in data.get("candidates") or []]
+        info["server_scan_id"] = saved.get("server_scan_id")
     except (OSError, ValueError, KeyError, TypeError):
         pass
     return info
