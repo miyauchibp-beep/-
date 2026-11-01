@@ -409,6 +409,16 @@ def rpm_gauge(rpm, low, high, top=4000, width=40):
     print(f"\r   {color}{''.join(cells)} {rpm:>5} rpm  {mark}\033[0m   ", end="", flush=True)
 
 
+def add_driving_log(report, path):
+    """走行記録のまとめを、診断に渡すスキャン結果に加える（1 回ごとの運転は多すぎないよう新しい 30 回まで）。"""
+    with open(path, encoding="utf-8") as f:
+        log = json.load(f)
+    report["driving_log"] = {"habits": log.get("habits"), "trips": (log.get("trips") or [])[-30:]}
+    print(f"\n走行記録のまとめを加えました（運転 {log.get('habits', {}).get('trips', 0)} 回）")
+    for note in (log.get("habits") or {}).get("notes") or []:
+        print(f"   ・{note}")
+
+
 def ask_yes(prompt):
     """[Enter = はい / n = いいえ]。対話できないとき（テスト・リダイレクト）は「いいえ」。"""
     if not sys.stdin or not sys.stdin.isatty():
@@ -658,6 +668,8 @@ def main(argv=None):
                     help="--live で見る項目を絞る（例: 15 や 15,14,0C。o2 で O2 センサ 2 つと回転数）。少ないほど速く更新")
     ap.add_argument("--demo", action="store_true", help="アダプタなしでシミュレータに対して実行")
     ap.add_argument("--no-ai", action="store_true", help="Claude による診断をしない")
+    ap.add_argument("--trips", metavar="JSON",
+                    help="analyze_trips.py で作った走行記録のまとめ（trips_日時.json）を診断に加える")
     ap.add_argument("--model", help="診断に使う Claude のモデル（既定 claude-sonnet-5-5。難しい車は claude-opus-5-5）")
     ap.add_argument("--prompt-only", action="store_true",
                     help="API を使わず、claude.ai のチャットに貼る文（scan_logs/prompt_日時.txt）だけ作る")
@@ -684,6 +696,8 @@ def main(argv=None):
             report = json.load(f)
         report.pop("ai_diagnosis", None)
         print_report(report)
+        if args.trips:
+            add_driving_log(report, args.trips)
         report["auto_checks"] = auto_checks(report)
         run_ai(report, stamp, scan_name=os.path.basename(args.from_scan), prompt_only=args.prompt_only,
                model=args.model)
@@ -768,6 +782,8 @@ def main(argv=None):
         elm.close()
         raw_file.close()
 
+    if args.trips:
+        add_driving_log(report, args.trips)
     report["auto_checks"] = auto_checks(report)
     if report["auto_checks"]:
         print("\n■ 自動チェック（機械的な目安）")

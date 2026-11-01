@@ -1551,6 +1551,101 @@ class UsageTest(unittest.TestCase):
                          {"avg_speed_kmh": 20.0})
 
 
+def _write_trip_csv(path, header_style="pid"):
+    """ちょい乗り 2 回（水温 70℃ 前に停止）と、しっかり走った運転 1 回の記録（1 秒ごと）。"""
+    rows = []
+    t = 1761955200.0  # 2025-11-01 の朝（UNIX 時刻）
+
+    def drive(minutes, start_c, end_c, cruise_speed, cruise_rpm):
+        nonlocal t
+        n = int(minutes * 60)
+        for i in range(n):
+            if i < 40:
+                speed, rpm = 0, 900      # 出発前のアイドル 40 秒
+            elif i > n - 20:
+                speed, rpm = 0, 800      # 着いてアイドル
+            else:
+                speed, rpm = cruise_speed, cruise_rpm
+            rows.append((t, rpm, speed, round(start_c + (end_c - start_c) * i / n, 1)))
+            t += 1
+        for _ in range(120):             # エンジンを止めて 2 分（回転 0）
+            rows.append((t, 0, 0, end_c))
+            t += 1
+        t += 3600                        # 次の運転まで 1 時間
+    drive(4, 20, 45, 30, 1500)           # 4 分・水温 45℃ で停止
+    drive(6, 25, 55, 35, 1700)           # 6 分・水温 55℃ で停止
+    drive(25, 30, 88, 60, 2200)          # 25 分・時速 60km
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        import csv as _csv
+        w = _csv.writer(f)
+        if header_style == "pid":
+            w.writerow(["time", "0C", "0D", "05"])
+            w.writerows(rows)
+        elif header_style == "live":       # このツールの --live --csv と同じ列名
+            w.writerow(["時刻", "エンジン回転数(rpm)", "車速(km/h)", "冷却水温(°C)"])
+            from datetime import datetime as _dt
+            w.writerows([(_dt.fromtimestamp(r[0]).isoformat(timespec="milliseconds"), *r[1:]) for r in rows])
+        else:                              # Torque の列名
+            w.writerow(["Device Time", "Engine RPM(rpm)", "Speed (OBD)(km/h)", "Engine Coolant Temperature(°C)"])
+            w.writerows(rows)
+
+
+class TripsTest(unittest.TestCase):
+    """走行ログを運転ごとにまとめ、乗り方のクセを出す。"""
+
+    def test_split_and_habits(self):
+        from obd_scanner.trips import analyze
+        for style in ("pid", "live", "torque"):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "log.csv")
+                _write_trip_csv(path, style)
+                result = analyze([path])
+            trips, h = result["trips"], result["habits"]
+            self.assertEqual(len(trips), 3, style)
+            self.assertEqual([t["stopped_cold"] for t in trips], [True, True, False], style)
+            self.assertEqual([t["good_drive"] for t in trips], [False, False, True], style)
+            self.assertAlmostEqual(trips[2]["km"], 24.3, delta=0.5)
+            self.assertEqual(trips[0]["coolant_max"], 44.9)
+            notes = "\n".join(h["notes"])
+            self.assertIn("3 回中 2 回が、水温 70℃ に届く前に止めている", notes)
+            self.assertIn("3 回中 2 回が 10 分未満", notes)
+            self.assertIn("回転を上げない運転", notes)
+
+    def test_free_log_json_is_readable(self):
+        from obd_scanner.trips import analyze
+        samples = [{"t": i * 2.0, "0C": 800 if i < 50 else 0, "0D": 0, "05": 60 + i * 0.2} for i in range(80)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "scan.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"stages": {"free_log": {"samples": samples}}}, f)
+            result = analyze([path])
+        self.assertEqual(result["habits"]["trips"], 1)
+        self.assertEqual(result["trips"][0]["idle_pct"], 100)
+
+    def test_cli_saves_and_scan_uses_it(self):
+        import analyze_trips
+        import obd_scan
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                _write_trip_csv("log.csv")
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(analyze_trips.main(["log.csv"]), 0)
+                self.assertIn("※冷えたまま停止", out.getvalue())
+                saved = [n for n in os.listdir("scan_logs") if n.startswith("trips_")]
+                report = {}
+                with contextlib.redirect_stdout(io.StringIO()):
+                    obd_scan.add_driving_log(report, os.path.join("scan_logs", saved[0]))
+                self.assertEqual(report["driving_log"]["habits"]["trips"], 3)
+            finally:
+                os.chdir(cwd)
+
+    def test_prompt_explains_driving_log(self):
+        from obd_scanner.ai_diag import SYSTEM_PROMPT_JSON
+        self.assertIn("driving_log", SYSTEM_PROMPT_JSON)
+
+
 class ZipContentsTest(unittest.TestCase):
     def test_zip_has_every_module(self):
         # 2026-10-30: checks.py を ZIP に入れ忘れ、店の PC で起動できなかった
@@ -1560,7 +1655,7 @@ class ZipContentsTest(unittest.TestCase):
         files = set(make_zip.FILES + make_zip.package_files())
         for path in glob.glob(os.path.join(root, "obd_scanner", "*.py")):
             self.assertIn("obd_scanner/" + os.path.basename(path), files)
-        for script in ("obd_scan.py", "record_result.py", "kline_init_test.py"):
+        for script in ("obd_scan.py", "record_result.py", "kline_init_test.py", "analyze_trips.py", "run_trips.bat"):
             self.assertIn(script, files)
 
 
@@ -1568,7 +1663,7 @@ class BatFileTest(unittest.TestCase):
     def test_bat_is_ascii_with_crlf(self):
         # LF 改行や日本語が入ると、cmd.exe がコマンドを読み違える
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        for name in ("run_kline_test.bat", "run_scan.bat", "run_diag_last.bat", "run_result.bat"):
+        for name in ("run_kline_test.bat", "run_scan.bat", "run_diag_last.bat", "run_result.bat", "run_trips.bat"):
             with open(os.path.join(root, name), "rb") as f:
                 data = f.read()
             data.decode("ascii")

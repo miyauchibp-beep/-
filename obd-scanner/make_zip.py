@@ -12,6 +12,8 @@ FILES = [
     "run_diag_last.bat",
     "record_result.py",
     "run_result.bat",
+    "analyze_trips.py",
+    "run_trips.bat",
     "kline_init_test.py",
     "run_kline_test.bat",
     # PC の Claude Code で作業を続けるための経緯・構想メモ
@@ -63,6 +65,12 @@ README = """OBD スキャンツール
   起動時に、これまでの的中率（1 位で当たり・候補に入っていた）を表示します。
   同じ車種（較正 ID が同じ）を次に診断するとき、この記録を Claude に参考として渡します。
   お客様の名前・電話番号は入れないでください。
+
+■ run_trips.bat … 走行中に記録したログを、1 回の運転ごとにまとめて、乗り方のクセを出す
+  ログのファイル（--live --csv の CSV、スマホの記録、市販アプリの CSV）をこの上にドラッグ＆ドロップ（複数可）。
+  運転ごとの時間・距離・水温（何℃まで上がったか）・最高回転と、「冷えたまま止めることが多い」などのクセを表示し、
+  scan_logs の trips_日時.json に保存します。診断に使うときは
+    python obd_scan.py COM6 --trips scan_logs\\trips_日時.json
 
 ■ run_kline_test.bat … 繋がらない車で、接続設定を探す
   繋がった設定は working_init.json に保存され、run_scan.bat が自動で使います。
