@@ -74,6 +74,57 @@ def read_mode09_text(elm, pid):
     return text or None
 
 
+# モード 09 InfoType 08: 走行条件の成立回数（IUPR、ガソリン車）。2 バイトずつ、この順に並ぶ
+IUPR_ITEMS = ["obd_cond", "ignition_cycles", "cat1_comp", "cat1_cond", "cat2_comp", "cat2_cond",
+              "o2_1_comp", "o2_1_cond", "o2_2_comp", "o2_2_cond", "egr_comp", "egr_cond",
+              "air_comp", "air_cond", "evap_comp", "evap_cond", "o2s2_1_comp", "o2s2_1_cond",
+              "o2s2_2_comp", "o2s2_2_cond"]
+
+
+def read_iupr(elm):
+    """モード 09 InfoType 08（走行条件の成立回数）を読む（CAN の車だけ）。読めなければ None。
+
+    obd_cond = エンジンをかけた運転のうち「10 分以上走り、時速 40km 以上で 5 分以上、アイドル 30 秒以上」を
+    満たした回数、ignition_cycles = エンジンをかけた回数。この比で「しっかり走った運転」の割合がわかる
+    （ちょい乗りの多さ）。各モニタの comp / cond は、触媒・O2 などの自己診断を実行できた回数 / 条件がそろった回数。
+    """
+    if not elm.is_can:
+        return None
+    try:
+        bodies = elm.query(0x09, 0x00)
+    except ObdError:
+        return None
+    if not any(len(b) >= 1 and b[0] & 0x01 for b in bodies):  # InfoType 08 に対応しているか
+        return None
+    try:
+        bodies = elm.query(0x09, 0x08)
+    except ObdError:
+        return None
+    body = max(bodies, key=len) if bodies else []
+    if len(body) < 5:
+        return None
+    count, data = body[0], body[1:]
+    values = [data[i] << 8 | data[i + 1] for i in range(0, min(count * 2, len(data) - 1), 2)]
+    return dict(zip(IUPR_ITEMS, values))
+
+
+def usage_summary(report):
+    """ECU が数えている合計から、乗り方の傾向を出す（1 回ごとの中身はわからない）。"""
+    live = {v["pid"]: v["value"] for v in report.get("live") or []}
+    out = {}
+    km, warmups, minutes = live.get("31"), live.get("30"), live.get("4E")
+    if km and warmups and warmups < 255:  # 255 は上限で止まっている
+        out["km_per_warmup"] = round(km / warmups, 1)
+    if km and minutes:
+        out["avg_speed_kmh"] = round(km / (minutes / 60), 1)
+    iupr = report.get("iupr") or {}
+    if iupr.get("ignition_cycles"):
+        out["ignition_cycles"] = iupr["ignition_cycles"]
+        out["good_drives"] = iupr.get("obd_cond", 0)
+        out["good_drive_ratio"] = round(out["good_drives"] / out["ignition_cycles"], 2)
+    return out or None
+
+
 def read_dtcs(elm):
     """現在・保留中・消せない（永久）故障コードを読む。"""
     result = {}
@@ -233,6 +284,8 @@ def full_scan(elm, trend_seconds=10.0):
     report["live"] = read_live(elm, live_pids)
     report["engine_running"] = engine_running(report["live"])
     report["mode06"] = read_mode06(elm)
+    report["iupr"] = read_iupr(elm)
+    report["usage"] = usage_summary(report)
     if report["engine_running"] and trend_seconds > 0:
         report["trend"] = sample_trend(elm, supported, trend_seconds)
     return report

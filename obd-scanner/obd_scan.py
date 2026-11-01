@@ -144,6 +144,17 @@ def print_report(r):
     for v in r["live"]:
         print(f"   {v['name']:<16} {v['value']} {v['unit']}")
 
+    u = r.get("usage")
+    if u:
+        print("\n■ 乗り方の目安（ECU が数えている合計から）")
+        if "good_drive_ratio" in u:
+            print(f"   エンジンをかけた {u['ignition_cycles']} 回のうち、しっかり走った運転 {u['good_drives']} 回"
+                  f"（{int(u['good_drive_ratio'] * 100)}%。10 分以上・時速 40km 以上で 5 分以上）")
+        if "km_per_warmup" in u:
+            print(f"   暖機 1 回あたり約 {u['km_per_warmup']} km（コード消去後）")
+        if "avg_speed_kmh" in u:
+            print(f"   平均速度 約 {u['avg_speed_kmh']} km/h（コード消去後）")
+
     m6 = r.get("mode06")
     if m6:
         failed = [x for x in m6 if not x["passed"]]

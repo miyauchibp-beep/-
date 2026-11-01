@@ -94,6 +94,12 @@ def auto_checks(report):
         if coolant and max(coolant) < 75:
             flags.append(f"15 分以上暖機しても水温が 75℃ に届いていない（最高 {max(coolant)}℃。サーモスタットの疑い）")
 
+    usage = report.get("usage") or {}
+    if usage.get("ignition_cycles", 0) >= 20 and usage.get("good_drive_ratio", 1) < 0.3:
+        flags.append(f"ちょい乗りが多い（エンジン始動 {usage['ignition_cycles']} 回のうち、しっかり走った運転は "
+                     f"{usage['good_drives']} 回・{int(usage['good_drive_ratio'] * 100)}%）。"
+                     "プラグのかぶり・バッテリーの充電不足・オイルの劣化が起きやすい")
+
     failed = [t for t in report.get("mode06") or [] if not t["passed"]]
     for t in failed[:5]:
         flags.append(f"モード 06 で不合格: {t['name']}（TID {t['tid']}、値 {t['value']}、範囲 {t['min']}〜{t['max']}）")

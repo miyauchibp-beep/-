@@ -1517,6 +1517,40 @@ class RelayServerClientTest(unittest.TestCase):
             self.assertEqual(json.load(f), json.loads(json.dumps(make_server_prompt.build())))
 
 
+class UsageTest(unittest.TestCase):
+    """乗り方の目安（モード 09 の走行条件の成立回数と、消去後の距離・暖機回数）。"""
+
+    def test_iupr_on_can(self):
+        from obd_scanner.checks import auto_checks
+        from obd_scanner.scan import full_scan
+        fake = FakeElm327(vehicle_protocol="6", needs_kw0=False)
+        elm = Elm327(fake)
+        elm.connect()
+        r = full_scan(elm, trend_seconds=0)
+        self.assertEqual((r["iupr"]["ignition_cycles"], r["iupr"]["obd_cond"]), (400, 80))
+        self.assertEqual((r["iupr"]["cat1_comp"], r["iupr"]["cat1_cond"]), (48, 80))
+        self.assertEqual(r["usage"]["good_drive_ratio"], 0.2)
+        self.assertIn("ちょい乗りが多い", "\n".join(auto_checks(r)))
+        self.assertTrue({c[:2] for c in fake.sent if not c.startswith("AT")} <= {"01", "02", "03", "06", "07", "09", "0A"})
+
+    def test_not_read_on_kline(self):
+        from obd_scanner.scan import read_iupr
+        fake = FakeElm327()
+        elm = Elm327(fake)
+        elm.connect(protocol="4", extra_init=["ATKW0"])
+        self.assertIsNone(read_iupr(elm))
+        self.assertNotIn("0900", fake.sent)
+
+    def test_km_per_warmup_from_dayz(self):
+        # デイズ: 消去後 2,593km・暖機 205 回 → 1 回あたり約 12.6km。255 は上限で止まっているので計算しない
+        from obd_scanner.scan import usage_summary
+        live = lambda km, n: {"live": [{"pid": "31", "value": km}, {"pid": "30", "value": n}]}
+        self.assertEqual(usage_summary(live(2593, 205)), {"km_per_warmup": 12.6})
+        self.assertIsNone(usage_summary(live(38381, 255)))
+        self.assertEqual(usage_summary({"live": [{"pid": "31", "value": 600}, {"pid": "4E", "value": 1800}]}),
+                         {"avg_speed_kmh": 20.0})
+
+
 class ZipContentsTest(unittest.TestCase):
     def test_zip_has_every_module(self):
         # 2026-10-30: checks.py を ZIP に入れ忘れ、店の PC で起動できなかった
