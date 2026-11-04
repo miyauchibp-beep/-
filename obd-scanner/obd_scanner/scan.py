@@ -53,12 +53,16 @@ def read_vin(elm):
 
 
 def read_calibration_id(elm):
-    """モード 09 PID 04 で ECU の較正 ID（ソフトの版）を読む。例: アレックス NZE121 は 31205100。"""
-    return read_mode09_text(elm, 0x04)
+    """モード 09 PID 04 で ECU の較正 ID（ソフトの版）を読む。例: アレックス NZE121 は 31205100。
+
+    較正 ID は 1 つ 16 バイトで、ECU が複数持つこともある。2026-11-04 ムーブ LA150S は 2 つ返し、
+    つながって 55H03020D91GB04 と読めていたので、16 バイトごとに区切り「/」でつなぐ（55H03020/D91GB04）。
+    """
+    return read_mode09_text(elm, 0x04, block=16)
 
 
-def read_mode09_text(elm, pid):
-    """モード 09 の文字列（車台番号・較正 ID など）を読む。"""
+def read_mode09_text(elm, pid, block=None):
+    """モード 09 の文字列（車台番号・較正 ID など）を読む。block を渡すと、その長さごとに区切る。"""
     try:
         bodies = elm.query(0x09, pid)
     except ObdError:
@@ -70,6 +74,9 @@ def read_mode09_text(elm, pid):
     else:
         # K-line: 1 行ごとに 連番 + 4 バイト
         data = [b for body in sorted(bodies, key=lambda x: x[0]) for b in body[1:]]
+    if block:
+        parts = ["".join(chr(b) for b in data[i:i + block] if 0x20 < b < 0x7F) for i in range(0, len(data), block)]
+        return "/".join(p for p in parts if p) or None
     text = "".join(chr(b) for b in data if 0x20 < b < 0x7F)
     return text or None
 

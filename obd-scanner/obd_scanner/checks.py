@@ -81,7 +81,9 @@ def auto_checks(report):
     running_volts = [v for v in running_volts if v is not None]
     if running_volts:
         if max(running_volts) < 13.2:
-            flags.append(f"エンジン稼働中の電圧が低め（{max(running_volts)}V。充電不足の疑い）")
+            # 2026-11-04 ムーブ LA150S: 始動直後 12.67V。充電制御の車は発電を抑えて 13V 前後で走ることがある
+            flags.append(f"エンジン稼働中の電圧が低め（{max(running_volts)}V。充電不足の疑い。"
+                         "ただし充電制御の車では正常なこともあるので、電気負荷をかけて上がるかを見る）")
         if max(running_volts) > 15.0:
             flags.append(f"エンジン稼働中の電圧が高め（{max(running_volts)}V）")
     battery = report.get("battery_voltage")

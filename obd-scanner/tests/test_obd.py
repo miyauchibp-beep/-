@@ -406,7 +406,7 @@ class RealNwgnCrankTest(unittest.TestCase):
         elm.connect(protocol="0")
         r = full_scan(elm, trend_seconds=0)
         self.assertEqual(r["vin"], "*******3971")
-        self.assertEqual(r["calibration_id"], "37805-5Z1-J760U")
+        self.assertEqual(r["calibration_id"], "37805-5Z1-J760")  # 末尾の詰め物 0x55（U）は落とす
         self.assertFalse(r["engine_running"])
         live = {v["pid"]: v["value"] for v in r["live"]}
         self.assertEqual(live["15"], 1.275)  # 冷えたキー ON でリア O2 は FF（上限）
@@ -596,6 +596,24 @@ class RealFreedTest(unittest.TestCase):
         self.assertEqual(codes, ["P0420", "P0731"])  # 故障コードはフィルタを外して全 ECU から
         i = fake.sent.index("03")
         self.assertEqual((fake.sent[i - 1], fake.sent[i + 1]), ("ATAR", "ATCRA18DAF110"))
+
+
+class RealMoveTest(unittest.TestCase):
+    """2026-11-04 ダイハツ ムーブ LA150S（CAN 11bit、ECU 1 つ、充電制御）。安い互換アダプタがモード 06 で BUFFER FULL。"""
+
+    def test_replay_scan(self):
+        from obd_scanner.scan import full_scan
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "move_la150s_raw_20261104.txt")
+        elm = Elm327(ReplayAdapter(path, sequential=True))
+        with self.assertRaises(ObdError):
+            elm.connect(protocol="7")
+        elm.connect(protocol="0")
+        r = full_scan(elm, trend_seconds=0)
+        self.assertEqual(r["calibration_id"], "55H03020/D91GB04")   # 較正 ID 2 つを区切って
+        # MID 01 は BUFFER FULL で読めなかったが、ほかの項目は読めて先へ進む
+        self.assertEqual([m["mid"] for m in r["mode06"]], ["02", "02", "21", "31", "81", "A2", "A2"])
+        live = {v["pid"]: v["value"] for v in r["live"]}
+        self.assertEqual(live["4E"], 22157)
 
 
 class AfSensorTest(unittest.TestCase):

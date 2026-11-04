@@ -88,22 +88,31 @@ def parse_response(raw):
         lines.append(line)
 
     messages = []
+    lengths = {}  # 複数フレームのメッセージ → 先頭の行で示されたバイト数
     multi = None
+    length = None
     for line in lines:
         m = _FRAME_INDEX.match(line)
         if m:
             if multi is None:
                 multi = []
                 messages.append(multi)
+                if length is not None:
+                    lengths[id(multi)] = length
             multi.extend(_to_bytes(m.group(2)))
             continue
         multi = None
         compact = line.replace(" ", "")
-        # CAN 複数フレームの先頭に付くバイト数（例: "014"）は捨てる
+        # CAN 複数フレームの先頭に付くバイト数（例: "014"）。続くフレームをこの長さで切る
         if len(compact) == 3 and _HEX_ONLY.match(compact):
+            length = int(compact, 16)
             continue
+        length = None
         if _HEX_ONLY.match(line):
             messages.append(_to_bytes(line))
+    # 最後のフレームの後ろの詰め物（00 や 55）を落とす。2026-11-04: Nワゴンの較正 ID の末尾に
+    # 詰め物の 0x55（「U」）が付いて 37805-5Z1-J760U と読めていた
+    messages = [msg[:lengths[id(msg)]] if id(msg) in lengths else msg for msg in messages]
     return [m for m in messages if m]
 
 
