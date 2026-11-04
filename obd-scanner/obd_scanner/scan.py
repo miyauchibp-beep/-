@@ -124,6 +124,8 @@ def usage_summary(report):
         out["km_per_warmup"] = round(km / warmups, 1)
     if km and minutes:
         out["avg_speed_kmh"] = round(km / (minutes / 60), 1)
+    if live.get("A6"):
+        out["odometer_km"] = live["A6"]  # ECU が持っている走行距離（メーターと同じとは限らない）
     iupr = report.get("iupr") or {}
     if iupr.get("ignition_cycles"):
         out["ignition_cycles"] = iupr["ignition_cycles"]

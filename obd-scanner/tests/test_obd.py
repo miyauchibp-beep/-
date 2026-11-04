@@ -598,6 +598,29 @@ class RealFreedTest(unittest.TestCase):
         self.assertEqual((fake.sent[i - 1], fake.sent[i + 1]), ("ATAR", "ATCRA18DAF110"))
 
 
+class MorePidsTest(unittest.TestCase):
+    """2026-11-04: ムーブが対応しているのに読み方がなかった項目と、ほかの車で出てくる項目を足した。"""
+
+    def test_decode(self):
+        self.assertEqual(pids.decode(0x1C, [0x0B]), ("JOBD と OBD-II", ""))
+        self.assertEqual(pids.decode(0x2D, [0x80]), (0.0, "%"))          # EGR のずれなし
+        self.assertEqual(pids.decode(0x47, [0xFF])[0], 100.0)
+        self.assertEqual(pids.decode(0x4C, [0x33])[0], 20.0)
+        self.assertEqual(pids.decode(0x50, [0x19]), (250, "g/s"))
+        self.assertIn("吸気管圧力 2550 kPa", pids.decode(0x4F, [2, 8, 100, 255])[0])
+        self.assertEqual(pids.decode(0x23, [0x01, 0x2C]), (3000, "kPa"))
+        self.assertEqual(pids.decode(0x62, [0x96]), (25, "%"))
+        self.assertEqual(pids.decode(0xA6, [0x00, 0x0A, 0x76, 0x8E]), (68571.0, "km"))  # 685,710 → 68,571.0 km
+
+    def test_odometer_in_usage(self):
+        from obd_scanner.scan import usage_summary
+        self.assertEqual(usage_summary({"live": [{"pid": "A6", "value": 68571.0}]}), {"odometer_km": 68571.0})
+
+    def test_all_pids_have_names_and_lengths(self):
+        for p in pids.PIDS.values():
+            self.assertTrue(p.name and p.length >= 1, p)
+
+
 class RealMoveTest(unittest.TestCase):
     """2026-11-04 ダイハツ ムーブ LA150S（CAN 11bit、ECU 1 つ、充電制御）。安い互換アダプタがモード 06 で BUFFER FULL。"""
 

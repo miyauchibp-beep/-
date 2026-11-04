@@ -45,6 +45,20 @@ _FUEL_STATUS = {
     0x10: "閉ループ（異常あり）",
 }
 
+# PID 1C この車が準拠している OBD の規格（日本の車は JOBD を含むことが多い）
+_OBD_STANDARD = {
+    0x01: "OBD-II（CARB）", 0x02: "OBD（EPA）", 0x03: "OBD と OBD-II", 0x04: "OBD-I", 0x05: "OBD 非対応",
+    0x06: "EOBD", 0x07: "EOBD と OBD-II", 0x08: "EOBD と OBD", 0x09: "EOBD・OBD・OBD-II",
+    0x0A: "JOBD", 0x0B: "JOBD と OBD-II", 0x0C: "JOBD と EOBD", 0x0D: "JOBD・EOBD・OBD-II",
+    0x11: "EMD", 0x12: "EMD+", 0x13: "HD OBD-C", 0x14: "HD OBD", 0x15: "WWH OBD",
+}
+
+
+def _max_values(d):
+    """PID 4F: ほかの項目の読み方の上限（当量比・O2 電圧・O2 電流・吸気管圧力）。"""
+    return f"λ {d[0]} / O2 {d[1]} V / 電流 {d[2]} mA / 吸気管圧力 {d[3] * 10} kPa"
+
+
 # PID 51 燃料の種類。0x11〜0x16 がハイブリッド（トヨタなどは 0x01 ガソリンと返す車もある）
 _FUEL_TYPE = {
     0x01: "ガソリン", 0x04: "ディーゼル", 0x05: "LPG", 0x08: "電気",
@@ -74,11 +88,15 @@ PIDS = {
         Pid(0x13, "O2 センサの装着位置", "", 1, _o2_locations),
         Pid(0x14, "O2 センサ B1S1", "V", 2, lambda d: round(d[0] / 200, 3)),
         Pid(0x15, "O2 センサ B1S2", "V", 2, lambda d: round(d[0] / 200, 3)),
+        Pid(0x1C, "準拠している OBD 規格", "", 1, lambda d: _OBD_STANDARD.get(d[0], f"0x{d[0]:02X}")),
         Pid(0x1F, "始動後経過時間", "秒", 2, _ab),
         # 広帯域（A/F）センサ。電圧型 O2（PID 14）の代わりに付いている車が多い。1.0 = 理論空燃比、小さいほど濃い
+        Pid(0x22, "燃圧（吸気管との差）", "kPa", 2, lambda d: round(_ab(d) * 0.079, 1)),
+        Pid(0x23, "燃圧（ゲージ圧）", "kPa", 2, lambda d: _ab(d) * 10),
         Pid(0x24, "A/F センサ B1S1 当量比 (λ)", "", 4, _lambda),
         Pid(0x21, "MIL 点灯後の走行距離", "km", 2, _ab),
         Pid(0x2C, "EGR 指令値", "%", 1, _pct),
+        Pid(0x2D, "EGR の指令とのずれ", "%", 1, _trim),
         Pid(0x2E, "パージ指令値", "%", 1, _pct),
         Pid(0x2F, "燃料残量", "%", 1, _pct),
         Pid(0x30, "DTC 消去後の暖機回数", "回", 1, _a),
@@ -91,13 +109,26 @@ PIDS = {
         Pid(0x44, "目標空燃比 (λ)", "", 2, lambda d: round(_ab(d) * 2 / 65536, 3)),
         Pid(0x45, "相対スロットル開度", "%", 1, _pct),
         Pid(0x46, "外気温", "°C", 1, _temp),
+        Pid(0x47, "スロットル開度 B（2 つ目のセンサ）", "%", 1, _pct),
+        Pid(0x48, "スロットル開度 C", "%", 1, _pct),
         Pid(0x49, "アクセル開度 D", "%", 1, _pct),
+        Pid(0x4A, "アクセル開度 E（2 つ目のセンサ）", "%", 1, _pct),
+        Pid(0x4B, "アクセル開度 F", "%", 1, _pct),
+        Pid(0x4C, "スロットル開度の指令値", "%", 1, _pct),
         Pid(0x4D, "MIL 点灯中の時間", "分", 2, _ab),
         Pid(0x4E, "DTC 消去後の時間", "分", 2, _ab),
+        Pid(0x4F, "読み方の上限値", "", 4, _max_values),
+        Pid(0x50, "吸入空気量の上限値", "g/s", 1, lambda d: d[0] * 10),
         Pid(0x51, "燃料の種類", "", 1, lambda d: _FUEL_TYPE.get(d[0], f"0x{d[0]:02X}")),
         Pid(0x5B, "ハイブリッドバッテリー残量", "%", 1, _pct),
         Pid(0x5C, "エンジン油温", "°C", 1, _temp),
+        Pid(0x59, "燃圧（燃料レール、絶対圧）", "kPa", 2, lambda d: _ab(d) * 10),
+        Pid(0x5A, "アクセル開度（相対）", "%", 1, _pct),
         Pid(0x5E, "燃料消費率", "L/h", 2, lambda d: round(_ab(d) / 20, 2)),
+        Pid(0x61, "要求トルク（運転者）", "%", 1, lambda d: d[0] - 125),
+        Pid(0x62, "実際のトルク", "%", 1, lambda d: d[0] - 125),
+        Pid(0x63, "基準トルク", "Nm", 2, _ab),
+        Pid(0xA6, "走行距離計", "km", 4, lambda d: round((d[0] << 24 | d[1] << 16 | d[2] << 8 | d[3]) / 10, 1)),
     ]
 }
 
