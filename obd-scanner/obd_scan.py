@@ -29,7 +29,7 @@ try:
     from obd_scanner.ai_diag import SYSTEM_PROMPT, AiDiagError, build_user_message, diagnose
     from obd_scanner.checks import auto_checks
     from obd_scanner.remote import load_server, remote_diagnose
-    from obd_scanner.cases import similar_cases
+    from obd_scanner.cases import same_calibration, similar_cases
     from obd_scanner.console import ask_port, remember_port, run_from_console
     from obd_scanner.elm327 import KNOWN_SETTINGS, Elm327, ObdError
     from obd_scanner.scan import (full_scan, hold_rpm_guided, is_hybrid, measure_running, read_coolant,
@@ -263,7 +263,11 @@ def run_ai(report, stamp, report_path=None, scan_name=None, prompt_only=False, m
             print("API キー（ANTHROPIC_API_KEY）が設定されていないので、チャットに貼る文を作ります。")
             prompt_only = True
     key = report.get("calibration_id") or report.get("vin")
-    known = load_vehicles().get(key, "") if key else ""
+    vehicles = load_vehicles()
+    known = vehicles.get(key, "") if key else ""
+    if key and not known:
+        # 較正 ID の読み方を直す前の記録（末尾に 1 文字多い）でも見つける
+        known = next((v for k, v in vehicles.items() if same_calibration(key, k)), "")
     if known:
         vehicle = ask(f"車両（Enter で「{known}」）: ") or known
     else:

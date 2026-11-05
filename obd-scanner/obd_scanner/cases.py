@@ -145,13 +145,31 @@ def load_cases(path=CASES_FILE):
     return cases
 
 
+def same_calibration(a, b):
+    """較正 ID が同じ車種か。2026-11-05 から複数フレームの詰め物を落としたので、古い記録は末尾に 1 文字多い
+    （Nワゴン 37805-5Z1-J760U → 37805-5Z1-J760）。8 文字以上で、片方がもう片方に 1 文字足しただけなら同じとみなす。"""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short, long_ = sorted((a, b), key=len)
+    return len(short) >= 8 and len(long_) == len(short) + 1 and long_.startswith(short)
+
+
+def same_vin(a, b):
+    """車台番号は下 4 桁だけ残すようにしたので（2026-10-30〜）、古い記録の全桁と下 4 桁で比べる。"""
+    if not a or not b:
+        return False
+    return a[-4:] == b[-4:] and len(a) == len(b)
+
+
 def similar_cases(report, cases=None, limit=5):
     """同じ車種の ECU（較正 ID が同じ）か、同じ車台番号の過去の答え合わせを、新しい順に返す。"""
     cases = load_cases() if cases is None else cases
     cal = report.get("calibration_id")
     vin = report.get("vin")
     hits = [c for c in cases
-            if (cal and c.get("calibration_id") == cal) or (vin and c.get("vin") == vin)]
+            if same_calibration(cal, c.get("calibration_id")) or same_vin(vin, c.get("vin"))]
     keep = ("vehicle", "symptom", "dtcs", "cause", "work", "verdict", "hit_candidate", "note", "recorded_at")
     return [{k: c.get(k) for k in keep if c.get(k)} for c in reversed(hits)][:limit]
 

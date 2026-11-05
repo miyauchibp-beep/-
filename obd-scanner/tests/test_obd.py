@@ -422,6 +422,49 @@ class RealNwgnCrankTest(unittest.TestCase):
         self.assertFalse(crank["started"])
 
 
+class RealNwgnAfterRepairTest(unittest.TestCase):
+    """2026-11-05 Nワゴン JH1 修理後（プラグ・コイル交換、車検後）。較正 ID の詰め物・モード 06 の符号付きの値を実車で確認。"""
+
+    def test_replay(self):
+        from obd_scanner.scan import full_scan
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "nwgn_jh1_after_repair_raw_20261105.txt")
+        elm = Elm327(ReplayAdapter(path, sequential=True))
+        with self.assertRaises(ObdError):
+            elm.connect(protocol="6")
+        elm.connect(protocol="0")
+        r = full_scan(elm, trend_seconds=0)
+        self.assertEqual(r["calibration_id"], "37805-5Z1-J760")
+        vvt = [m for m in r["mode06"] if m["mid"] == "35" and m["tid"] == "D9"][0]
+        self.assertEqual((vvt["value"], vvt["min"], vvt["max"], vvt["passed"]), (-110, -1000, 1000, True))
+        self.assertIsNone(r["iupr"])                      # この車はモード 09 の 08 に対応していない
+        self.assertEqual(r["usage"], {"km_per_warmup": 16.5})
+        live = {v["pid"]: v["value"] for v in r["live"]}
+        self.assertEqual(live["1C"], "JOBD")
+
+    def test_vehicle_name_found_with_old_calibration_id(self):
+        import obd_scan
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("scan_logs")
+                with open("vehicles.json", "w", encoding="utf-8") as f:
+                    json.dump({"37805-5Z1-J760U": "ホンダ Nワゴン JH1"}, f, ensure_ascii=False)
+                prompts = []
+                answers = iter(["", "", ""])
+
+                def ask(prompt):
+                    prompts.append(prompt)
+                    return next(answers)
+                with mock.patch.object(obd_scan, "diagnose", lambda *a, **kw: "ok"), \
+                        mock.patch.object(obd_scan, "ask", ask), contextlib.redirect_stdout(io.StringIO()):
+                    obd_scan.run_ai({"calibration_id": "37805-5Z1-J760"}, "20261105_140000")
+                self.assertIn("ホンダ Nワゴン JH1", prompts[1])
+            finally:
+                os.chdir(cwd)
+
+
 class TwoEcuTest(unittest.TestCase):
     """CAN でエンジンとミッションの 2 つの ECU が答える車（2026-10-29 バネット）。"""
 
@@ -1229,6 +1272,16 @@ class CasesTest(unittest.TestCase):
                 self.assertEqual(saved["vehicle"], "トヨタ bB")
             finally:
                 os.chdir(cwd)
+
+    def test_old_records_still_match(self):
+        # 10/29 の記録は較正 ID の末尾に詰め物の U、車台番号は全桁。11/5 からは U なし・下 4 桁だけ
+        from obd_scanner import cases
+        old = [{"calibration_id": "37805-5Z1-J760U", "vin": "JH1-1003971", "cause": "プラグのかぶり"}]
+        self.assertEqual(cases.similar_cases({"calibration_id": "37805-5Z1-J760"}, old)[0]["cause"], "プラグのかぶり")
+        self.assertEqual(len(cases.similar_cases({"vin": "*******3971"}, old)), 1)
+        self.assertFalse(cases.same_calibration("1860C580", "1860C5800201"))   # 4 文字違いは別
+        self.assertFalse(cases.same_calibration("ABC", "ABCD"))               # 短すぎるものは比べない
+        self.assertFalse(cases.same_vin("*******3971", "*****3971"))          # 桁数が違えば別の車
 
     def test_past_cases_in_message(self):
         from obd_scanner.ai_diag import build_user_message
