@@ -40,7 +40,8 @@
 2. お店の入庫車で使い続け、答え合わせ（run_result.bat）を貯める。走行記録は --live --csv → run_trips.bat
 3. スマホの走行記録係（moto g52j 5G ＋ 今の Bluetooth アダプタ）は、作ってと言われるまで作らない
 4. 中継サーバー（server/）は作成済み。配布しないなら急がない（PC は API キーを直接使えばよい）
-5. KTS 560 のパススルー: PC ⇔ KTS は繋がるが車へ送れず保留（docs/KTS560_passthru.md）。Bosch の回答待ち
+5. KTS 560: 使わないことに決定（2026-11-13、店主）。深い診断（メーカー別）はスナップオンがあるので不要。
+   汎用 OBD は OBDLink を買ってこのツールで読む。調べた記録は docs/KTS560_passthru.md に残す
 
 ### API の費用（実測）
 - Sonnet・effort high で 1 回の診断が約 2.4 万トークン・約 20 円（Opus は約 40 円）。Console の月間上限は $20 程度に
