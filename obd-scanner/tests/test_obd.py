@@ -465,6 +465,28 @@ class RealNwgnAfterRepairTest(unittest.TestCase):
                 os.chdir(cwd)
 
 
+class RealAltoTest(unittest.TestCase):
+    """2026-11-21 スズキ アルト HA97S（マイルドハイブリッド、CAN 11bit）。前の車の設定（29bit）で失敗してから自動で繋がる。"""
+
+    def test_replay(self):
+        from obd_scanner.scan import full_scan
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "alto_ha97s_raw_20261121.txt")
+        elm = Elm327(ReplayAdapter(path, sequential=True))
+        with self.assertRaises(ObdError):
+            elm.connect(protocol="7")
+        elm.connect(protocol="0")
+        r = full_scan(elm, trend_seconds=0)
+        self.assertEqual(r["battery_voltage"], 11.9)
+        self.assertEqual(r["calibration_id"], "33980-67T0*00002")
+        self.assertIn("4C", r["supported_pids"])
+        self.assertEqual([(m["mid"], m["tid"], m["passed"]) for m in r["mode06"]], [("21", "D1", True), ("31", "D8", True)])
+        self.assertIsNone(r["iupr"])                      # モード 09 は 02・04 だけ
+        self.assertIsNone(r["usage"])                     # 暖機回数が上限の 255、PID 4E なし
+        self.assertEqual(r["dtcs"], {"stored": [], "pending": [], "permanent": []})
+        live = {v["pid"]: v["value"] for v in r["live"]}
+        self.assertEqual(live["31"], 27459)
+
+
 class TwoEcuTest(unittest.TestCase):
     """CAN でエンジンとミッションの 2 つの ECU が答える車（2026-10-29 バネット）。"""
 
